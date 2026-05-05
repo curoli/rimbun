@@ -1,0 +1,85 @@
+import { apiRequest } from "./client";
+import type {
+  DocumentDetailResponse,
+  DocumentRecord,
+  DraftRecord,
+  PublishResponse,
+  SectionRecord,
+  SectionViewResponse,
+} from "./types";
+
+export function listDocuments() {
+  return apiRequest<DocumentRecord[]>("/api/documents");
+}
+
+export function getDocument(id: string) {
+  return apiRequest<DocumentDetailResponse>(`/api/documents/${id}`);
+}
+
+export function createDocument(payload: {
+  slug: string;
+  title: string;
+  visibility: "public" | "authenticated";
+  markdown_policy?: Record<string, unknown>;
+}) {
+  return apiRequest<DocumentRecord>("/api/documents", {
+    method: "POST",
+    bodyJson: payload,
+  });
+}
+
+export function createSection(
+  documentId: string,
+  payload: {
+    parent_id: string | null;
+    title: string;
+    position: number;
+  },
+) {
+  return apiRequest<SectionRecord>(`/api/documents/${documentId}/sections`, {
+    method: "POST",
+    bodyJson: payload,
+  });
+}
+
+export function updateSection(
+  sectionId: string,
+  payload: {
+    title: string;
+    parent_id: string | null;
+    position: number;
+  },
+) {
+  return apiRequest<SectionRecord>(`/api/sections/${sectionId}`, {
+    method: "PATCH",
+    bodyJson: payload,
+  });
+}
+
+export function getSectionView(sectionId: string) {
+  return apiRequest<SectionViewResponse>(`/api/sections/${sectionId}/view`);
+}
+
+export function saveDraft(sectionId: string, payload: { base_submission_id: string | null; markdown_content: string }) {
+  return apiRequest<DraftRecord>(`/api/sections/${sectionId}/draft`, {
+    method: "PUT",
+    bodyJson: payload,
+  });
+}
+
+export function publishSection(sectionId: string, payload: { base_submission_id: string | null; markdown_content: string }) {
+  return apiRequest<PublishResponse>(`/api/sections/${sectionId}/publish`, {
+    method: "POST",
+    bodyJson: payload,
+  });
+}
+
+export function setPreferredBase(sectionId: string, preferredBaseSubmissionId: string) {
+  return apiRequest<{ preferred_base_submission_id: string }>(
+    `/api/sections/${sectionId}/preferences/base-submission`,
+    {
+      method: "PUT",
+      bodyJson: { preferred_base_submission_id: preferredBaseSubmissionId },
+    },
+  );
+}
