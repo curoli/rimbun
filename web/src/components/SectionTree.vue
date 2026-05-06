@@ -42,6 +42,37 @@ const orderedSections = computed(() => {
   visit(null);
   return result;
 });
+
+const sectionNumbers = computed(() => {
+  const byParent = new Map<string | null, SectionRecord[]>();
+
+  for (const section of props.sections) {
+    const group = byParent.get(section.parent_id) ?? [];
+    group.push(section);
+    byParent.set(section.parent_id, group);
+  }
+
+  for (const group of byParent.values()) {
+    group.sort((a, b) => a.position - b.position || a.created_at.localeCompare(b.created_at));
+  }
+
+  const result = new Map<string, { short: string; full: string }>();
+
+  function visit(parentId: string | null, prefix: number[]) {
+    const children = byParent.get(parentId) ?? [];
+    children.forEach((child, index) => {
+      const nextPrefix = [...prefix, index + 1];
+      result.set(child.id, {
+        short: String(index + 1),
+        full: nextPrefix.join("."),
+      });
+      visit(child.id, nextPrefix);
+    });
+  }
+
+  visit(null, []);
+  return result;
+});
 </script>
 
 <template>
@@ -58,7 +89,8 @@ const orderedSections = computed(() => {
       :style="{ paddingLeft: `${1 + depthFor(section.path) * 1.1}rem` }"
       @click="emit('select', section.id)"
     >
-      {{ section.title }}
+      <span class="tree-number">{{ sectionNumbers.get(section.id)?.short }}</span>
+      <span class="tree-title">{{ section.title }}</span>
     </button>
   </aside>
 </template>
@@ -89,6 +121,9 @@ const orderedSections = computed(() => {
 }
 
 .tree-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.65rem;
   text-align: left;
   border: 0;
   border-radius: 0.9rem;
@@ -103,5 +138,15 @@ const orderedSections = computed(() => {
 .tree-row.active {
   background: #f1dcc4;
   transform: translateX(2px);
+}
+
+.tree-number {
+  min-width: 1ch;
+  color: #8e4b16;
+  font-variant-numeric: tabular-nums;
+}
+
+.tree-title {
+  min-width: 0;
 }
 </style>

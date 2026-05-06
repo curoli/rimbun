@@ -49,6 +49,34 @@ const orderedSections = computed(() => {
   return result;
 });
 
+const sectionNumbers = computed(() => {
+  const byParent = new Map<string | null, SectionRecord[]>();
+
+  for (const section of orderedSections.value) {
+    const group = byParent.get(section.parent_id) ?? [];
+    group.push(section);
+    byParent.set(section.parent_id, group);
+  }
+
+  for (const group of byParent.values()) {
+    group.sort((a, b) => a.position - b.position || a.created_at.localeCompare(b.created_at));
+  }
+
+  const result = new Map<string, string>();
+
+  function visit(parentId: string | null, prefix: number[]) {
+    const children = byParent.get(parentId) ?? [];
+    children.forEach((child, index) => {
+      const nextPrefix = [...prefix, index + 1];
+      result.set(child.id, nextPrefix.join("."));
+      visit(child.id, nextPrefix);
+    });
+  }
+
+  visit(null, []);
+  return result;
+});
+
 const readerSections = computed(() =>
   orderedSections.value.map((section) => {
     const view = sectionViews.value[section.id];
@@ -61,6 +89,7 @@ const readerSections = computed(() =>
 
     return {
       section,
+      number: sectionNumbers.value.get(section.id) ?? "",
       mainSubmission,
       alternativeCount,
     };
@@ -159,29 +188,20 @@ onMounted(async () => {
         />
 
         <section class="reader-panel">
-          <div class="reader-panel-header">
-            <div>
-              <p class="eyebrow">Reader View</p>
-              <h2>Whole document reading flow</h2>
-            </div>
-            <p class="reader-copy">
-              This view shows the global main variant of each section in document order and points to available alternatives.
-            </p>
-          </div>
           <p v-if="isLoadingReader">Loading document text...</p>
           <div v-else-if="readerSections.length" class="reader-sections">
-            <article
+            <section
               v-for="item in readerSections"
               :id="`reader-section-${item.section.id}`"
               :key="item.section.id"
               class="reader-section"
               :class="{ active: item.section.id === selectedSectionId }"
             >
-              <div class="reader-section-header">
-                <div>
-                  <span class="reader-kicker">Section</span>
-                  <h3>{{ item.section.title }}</h3>
-                </div>
+              <div class="reader-section-heading">
+                <h2>
+                  <span class="reader-section-number">{{ item.number }}</span>
+                  {{ item.section.title }}
+                </h2>
                 <div class="reader-section-meta">
                   <span v-if="item.mainSubmission">
                     {{ submissionLabel(item.mainSubmission) }}
@@ -204,7 +224,7 @@ onMounted(async () => {
                 <RouterLink :to="`/documents/${documentData.document.id}/compare`">Compare alternatives</RouterLink>
                 <RouterLink :to="`/sections/${item.section.id}/edit`">Edit this section</RouterLink>
               </div>
-            </article>
+            </section>
           </div>
           <p v-else class="reader-empty">This document has no sections yet.</p>
         </section>
@@ -219,69 +239,61 @@ onMounted(async () => {
 .reader-panel {
   display: flex;
   flex-direction: column;
-  gap: 1rem;
-  padding: 1.25rem;
-  border-radius: 1.25rem;
-  background: rgba(255, 252, 247, 0.94);
-  border: 1px solid rgba(35, 24, 15, 0.08);
+  gap: 1.5rem;
+  padding: 0.25rem 0;
 }
 
-.reader-panel-header,
-.reader-section-header {
-  display: flex;
-  justify-content: space-between;
-  gap: 1rem;
-  align-items: flex-start;
-}
-
-.reader-panel-header h2,
-.reader-copy,
 .reader-empty,
-.reader-section-header h3 {
+.reader-section-heading h2 {
   margin: 0;
-}
-
-.reader-copy {
-  max-width: 34ch;
-  color: #6f5947;
 }
 
 .reader-sections {
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  gap: 2rem;
 }
 
 .reader-section {
   display: flex;
   flex-direction: column;
-  gap: 0.85rem;
-  padding: 1.1rem;
-  border-radius: 1rem;
-  background: #fffdf9;
-  border: 1px solid rgba(35, 24, 15, 0.08);
+  gap: 0.95rem;
+  padding-top: 2rem;
+  border-top: 1px solid rgba(35, 24, 15, 0.1);
+}
+
+.reader-section:first-child {
+  padding-top: 0;
+  border-top: 0;
 }
 
 .reader-section.active {
-  box-shadow: inset 0 0 0 2px rgba(142, 75, 22, 0.22);
-}
-
-.reader-kicker {
-  display: inline-block;
-  margin-bottom: 0.3rem;
-  color: #8e4b16;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  font-size: 0.76rem;
+  scroll-margin-top: 5rem;
 }
 
 .reader-section-meta {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 0.45rem;
+  flex-wrap: wrap;
+  gap: 0.65rem;
   color: #6f5947;
-  font-size: 0.92rem;
+  font-size: 0.88rem;
+}
+
+.reader-section-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.reader-section-heading h2 {
+  font-size: clamp(1.25rem, 2vw, 1.7rem);
+  line-height: 1.08;
+}
+
+.reader-section-number {
+  margin-right: 0.55rem;
+  color: #8e4b16;
+  font-variant-numeric: tabular-nums;
 }
 
 .reader-badge {
@@ -293,8 +305,9 @@ onMounted(async () => {
 
 .reader-markdown {
   white-space: pre-wrap;
-  line-height: 1.6;
+  line-height: 1.72;
   color: #2d1d12;
+  font-size: 1.02rem;
 }
 
 .reader-actions {
@@ -313,13 +326,5 @@ onMounted(async () => {
 }
 
 @media (max-width: 960px) {
-  .reader-panel-header,
-  .reader-section-header {
-    flex-direction: column;
-  }
-
-  .reader-section-meta {
-    align-items: flex-start;
-  }
 }
 </style>
