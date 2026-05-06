@@ -1,7 +1,9 @@
 <script setup lang="ts">
+import { computed } from "vue";
+
 import type { SectionRecord } from "../api/types";
 
-defineProps<{
+const props = defineProps<{
   sections: SectionRecord[];
   activeSectionId: string | null;
 }>();
@@ -13,6 +15,33 @@ const emit = defineEmits<{
 function depthFor(path: string) {
   return path.split("/").length - 1;
 }
+
+const orderedSections = computed(() => {
+  const byParent = new Map<string | null, SectionRecord[]>();
+
+  for (const section of props.sections) {
+    const group = byParent.get(section.parent_id) ?? [];
+    group.push(section);
+    byParent.set(section.parent_id, group);
+  }
+
+  for (const group of byParent.values()) {
+    group.sort((a, b) => a.position - b.position || a.created_at.localeCompare(b.created_at));
+  }
+
+  const result: SectionRecord[] = [];
+
+  function visit(parentId: string | null) {
+    const children = byParent.get(parentId) ?? [];
+    for (const child of children) {
+      result.push(child);
+      visit(child.id);
+    }
+  }
+
+  visit(null);
+  return result;
+});
 </script>
 
 <template>
@@ -22,7 +51,7 @@ function depthFor(path: string) {
       <span>{{ sections.length }}</span>
     </div>
     <button
-      v-for="section in sections"
+      v-for="section in orderedSections"
       :key="section.id"
       class="tree-row"
       :class="{ active: section.id === activeSectionId }"
