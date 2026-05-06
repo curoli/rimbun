@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from "vue";
-import { RouterLink, useRoute, useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 
 import { getDocument, getSectionView } from "../api/documents";
 import type { DocumentDetailResponse, SectionRecord, SectionViewResponse } from "../api/types";
@@ -16,7 +16,7 @@ const documentData = ref<DocumentDetailResponse | null>(null);
 const sectionViews = ref<Record<string, SectionViewResponse>>({});
 const selectedSectionId = ref<string | null>(null);
 const isLoadingDocument = ref(true);
-const isLoadingReader = ref(false);
+const isLoadingViews = ref(false);
 const error = ref<string | null>(null);
 
 const canManageOutline = computed(() =>
@@ -49,21 +49,20 @@ const orderedSections = computed(() => {
   return result;
 });
 
-const readerSections = computed(() =>
+const compareSections = computed(() =>
   orderedSections.value.map((section) => {
     const view = sectionViews.value[section.id];
-    const mainSubmission =
+    const main =
       view?.active_submissions.find(
         (submission) => view.projection.find((item) => item.submission_id === submission.id)?.role === "main",
       ) ?? view?.active_submissions[0] ?? null;
-    const alternativeCount =
-      view?.projection.filter((item) => item.role === "principal_alternative").length ?? 0;
+    const alternatives =
+      view?.active_submissions.filter(
+        (submission) =>
+          view.projection.find((item) => item.submission_id === submission.id)?.role === "principal_alternative",
+      ) ?? [];
 
-    return {
-      section,
-      mainSubmission,
-      alternativeCount,
-    };
+    return { section, main, alternatives };
   }),
 );
 
@@ -79,7 +78,6 @@ async function loadDocument() {
 
   isLoadingDocument.value = true;
   error.value = null;
-
   try {
     const data = await getDocument(id);
     documentData.value = data;
@@ -98,21 +96,21 @@ async function loadDocument() {
 }
 
 async function loadSectionViews(sectionIds: string[]) {
-  isLoadingReader.value = true;
+  isLoadingViews.value = true;
   try {
     const entries = await Promise.all(
       sectionIds.map(async (sectionId) => [sectionId, await getSectionView(sectionId)] as const),
     );
     sectionViews.value = Object.fromEntries(entries);
   } finally {
-    isLoadingReader.value = false;
+    isLoadingViews.value = false;
   }
 }
 
 async function handleSelectSection(sectionId: string) {
   selectedSectionId.value = sectionId;
   await nextTick();
-  document.getElementById(`reader-section-${sectionId}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  document.getElementById(`compare-section-${sectionId}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 watch(
@@ -133,7 +131,6 @@ onMounted(async () => {
   <main class="document-page">
     <p v-if="isLoadingDocument">Loading document...</p>
     <p v-else-if="error && !documentData" class="error">{{ error }}</p>
-
     <template v-else-if="documentData">
       <section class="document-header">
         <div>
@@ -146,7 +143,7 @@ onMounted(async () => {
             :document-id="documentData.document.id"
             :can-manage-outline="canManageOutline"
             :section-id="selectedSectionId"
-            active-view="reader"
+            active-view="compare"
           />
         </div>
       </section>
@@ -158,55 +155,57 @@ onMounted(async () => {
           @select="handleSelectSection"
         />
 
-        <section class="reader-panel">
-          <div class="reader-panel-header">
+        <section class="compare-panel">
+          <div class="compare-panel-header">
             <div>
-              <p class="eyebrow">Reader View</p>
-              <h2>Whole document reading flow</h2>
+              <p class="eyebrow">Compare View</p>
+              <h2>Main version and principal alternatives</h2>
             </div>
-            <p class="reader-copy">
-              This view shows the global main variant of each section in document order and points to available alternatives.
+            <p class="compare-copy">
+              This first compare slice is section-based: it shows the global main version next to the principal alternatives.
             </p>
           </div>
-          <p v-if="isLoadingReader">Loading document text...</p>
-          <div v-else-if="readerSections.length" class="reader-sections">
+
+          <p v-if="isLoadingViews">Loading comparisons...</p>
+          <div v-else class="compare-sections">
             <article
-              v-for="item in readerSections"
-              :id="`reader-section-${item.section.id}`"
+              v-for="item in compareSections"
+              :id="`compare-section-${item.section.id}`"
               :key="item.section.id"
-              class="reader-section"
+              class="compare-section"
               :class="{ active: item.section.id === selectedSectionId }"
             >
-              <div class="reader-section-header">
+              <header class="compare-section-header">
                 <div>
-                  <span class="reader-kicker">Section</span>
+                  <span class="section-kicker">Section</span>
                   <h3>{{ item.section.title }}</h3>
                 </div>
-                <div class="reader-section-meta">
-                  <span v-if="item.mainSubmission">
-                    {{ submissionLabel(item.mainSubmission) }}
-                  </span>
-                  <span v-else>No published version yet</span>
-                  <span v-if="item.alternativeCount" class="reader-badge">
-                    {{ item.alternativeCount }} alternative{{ item.alternativeCount === 1 ? "" : "s" }}
-                  </span>
-                </div>
-              </div>
+                <RouterLink class="edit-link" :to="`/sections/${item.section.id}/edit`">
+                  Edit this section
+                </RouterLink>
+              </header>
 
-              <div v-if="item.mainSubmission" class="reader-markdown">
-                {{ item.mainSubmission.markdown_content }}
-              </div>
-              <p v-else class="reader-empty">
-                No published content exists for this section yet.
-              </p>
+              <div class="compare-grid">
+                <section class="compare-card main">
+                  <p class="card-label">Global Main Version</p>
+                  <strong v-if="item.main">{{ submissionLabel(item.main) }}</strong>
+                  <p v-else class="empty-note">No published version yet.</p>
+                  <pre v-if="item.main">{{ item.main.markdown_content }}</pre>
+                </section>
 
-              <div class="reader-actions">
-                <RouterLink :to="`/documents/${documentData.document.id}/compare`">Compare alternatives</RouterLink>
-                <RouterLink :to="`/sections/${item.section.id}/edit`">Edit this section</RouterLink>
+                <section class="compare-card">
+                  <p class="card-label">Principal Alternatives</p>
+                  <div v-if="item.alternatives.length" class="alternatives">
+                    <article v-for="alternative in item.alternatives" :key="alternative.id" class="alternative-card">
+                      <strong>{{ submissionLabel(alternative) }}</strong>
+                      <pre>{{ alternative.markdown_content }}</pre>
+                    </article>
+                  </div>
+                  <p v-else class="empty-note">No principal alternatives yet.</p>
+                </section>
               </div>
             </article>
           </div>
-          <p v-else class="reader-empty">This document has no sections yet.</p>
         </section>
       </section>
     </template>
@@ -216,110 +215,113 @@ onMounted(async () => {
 <style scoped>
 @import "./document-shared.css";
 
-.reader-panel {
+.compare-panel,
+.compare-section,
+.compare-card,
+.alternative-card {
+  border: 1px solid rgba(35, 24, 15, 0.08);
+}
+
+.compare-panel {
   display: flex;
   flex-direction: column;
   gap: 1rem;
   padding: 1.25rem;
   border-radius: 1.25rem;
   background: rgba(255, 252, 247, 0.94);
-  border: 1px solid rgba(35, 24, 15, 0.08);
 }
 
-.reader-panel-header,
-.reader-section-header {
+.compare-panel-header,
+.compare-section-header {
   display: flex;
   justify-content: space-between;
   gap: 1rem;
   align-items: flex-start;
 }
 
-.reader-panel-header h2,
-.reader-copy,
-.reader-empty,
-.reader-section-header h3 {
+.compare-panel-header h2,
+.compare-copy,
+.compare-section-header h3,
+.empty-note {
   margin: 0;
 }
 
-.reader-copy {
-  max-width: 34ch;
+.compare-copy {
+  max-width: 38ch;
   color: #6f5947;
 }
 
-.reader-sections {
+.compare-sections {
   display: flex;
   flex-direction: column;
   gap: 1rem;
 }
 
-.reader-section {
+.compare-section {
   display: flex;
   flex-direction: column;
-  gap: 0.85rem;
-  padding: 1.1rem;
+  gap: 1rem;
+  padding: 1rem;
   border-radius: 1rem;
   background: #fffdf9;
-  border: 1px solid rgba(35, 24, 15, 0.08);
 }
 
-.reader-section.active {
+.compare-section.active {
   box-shadow: inset 0 0 0 2px rgba(142, 75, 22, 0.22);
 }
 
-.reader-kicker {
-  display: inline-block;
-  margin-bottom: 0.3rem;
+.section-kicker,
+.card-label {
   color: #8e4b16;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   font-size: 0.76rem;
 }
 
-.reader-section-meta {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 0.45rem;
-  color: #6f5947;
-  font-size: 0.92rem;
-}
-
-.reader-badge {
-  padding: 0.35rem 0.6rem;
-  border-radius: 999px;
-  background: #f1dcc4;
-  color: #5f3b1c;
-}
-
-.reader-markdown {
-  white-space: pre-wrap;
-  line-height: 1.6;
-  color: #2d1d12;
-}
-
-.reader-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.9rem;
-}
-
-.reader-actions a {
+.edit-link {
   color: #8e4b16;
   text-decoration: none;
 }
 
-.error {
-  color: #9d2a16;
+.compare-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.compare-card,
+.alternative-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.95rem;
+  border-radius: 1rem;
+  background: white;
+}
+
+.compare-card.main {
+  background: #fff6eb;
+}
+
+.alternatives {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+pre {
+  margin: 0;
+  white-space: pre-wrap;
+  font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
+  line-height: 1.55;
 }
 
 @media (max-width: 960px) {
-  .reader-panel-header,
-  .reader-section-header {
+  .compare-panel-header,
+  .compare-section-header,
+  .compare-grid {
+    display: flex;
     flex-direction: column;
-  }
-
-  .reader-section-meta {
-    align-items: flex-start;
   }
 }
 </style>
