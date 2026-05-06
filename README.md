@@ -1,61 +1,236 @@
 # Rimbun
 
-Rimbun is a project to create a new kind of collaborative content creation platform, where differences between alternative versions can easily be seen and browsed, where AI helps organize versions according to meaning.
+Rimbun is an experimental collaborative writing platform for section-based documents with competing published versions.
 
-## Motivation
+It is motivated by a gap in existing tools:
 
-When you see a sentence on Wikipedia, all you know is that some one brought this sentence into its current form, and since then, no one changed it. You can not see immediately whether there were other versions of that sentence.
+- platforms like Wikipedia are very good at presenting the current consensus version, but they largely hide competing stable alternatives in the edit history
+- collaborative editors like Google Docs are very good at drafting and suggesting changes, but they do not treat published alternative versions as first-class readable objects
+- Rimbun aims to make these alternatives visible, comparable, and editable without forcing readers to reconstruct them from revision logs
 
-Sure, you can browse the version history. But that means scanning all changes ever made, and there is no easy way to see, which changes affect this particular sentence.
+The goal is not only to preserve history, but to surface meaningful variation directly in the reading experience.
 
-With git, there is a feature to find out who made the last change to a line (git blame), and when it was made, and one could look up the relevant commit and see what was before. But that requires considerable effort, too.
+The current repository already contains a working MVP slice:
 
-The idea of Rimbun is that as you see the text, you can immediately see where alternative versions exist, and you can browse them and compare them immediately without much effort.
+- a Rust backend with authentication, document and section storage, drafts, publishing, moderation, and simple projection logic
+- a Vue frontend with reader, compare, section edit, and outline edit views
+- multi-user accounts with privileged outline management
+- a local Postgres-backed development setup
 
-To a degree, of course. When too many versions exist, not all can be shown. Also, a version might have been downvoted enough to be deemed unworthy to be shown, or excluded for other reasons. But where alternative versions exist with substantial community support, the most important versions will be immediately visible.
+The long-term product idea is still the same: show a main version of a text, surface meaningful alternatives, and make it easy to compare and edit them. But this repository is no longer just a concept note; it is a runnable application prototype.
 
-To achieve this goal, Rimbun needs to be aware of two different kinds of similarity between versions: textual and semantic.
+## Current MVP
 
-Textual similarity means that two texts have identical segments. For example, two sentences where only one word differs are textually similar. Textual similarity is essential when multiple versions are shown to readers for comparison.
+What exists today:
 
-Semantic similarity means, two versions have a similar meaning or impact. Semantic similarity can be detected through user feedback or through AI. Semantic similarity is essential when deciding which versions are prioritized for showing to readers.
+- accounts with username, display name, email, and password
+- privileged users can create documents and edit the section outline
+- normal users can edit section drafts and publish section versions
+- reader view for the whole document
+- compare view for section-level main versions and principal alternatives
+- section edit view
+- outline edit view
+- simple multi-account switching in one browser
+- automated Rust integration tests and frontend build verification
 
-For example, take these three sentences:
+What is still intentionally incomplete:
 
-1. Today is a hot day in Bandung
-1. Today is a cold day in Bandung
-1. On this date, the outside temperature in Bandung is far above average
+- no full production deployment stack in this repository
+- no live collaboration
+- no finished semantic embedding/clustering pipeline yet
+- compare view is still section-based, not yet a fine-grained diff browser
+- markdown is currently shown as plain formatted text in reader/compare views, not yet as a full renderer
 
-The first two sentences are textually similar, because they differ in only one word, but semantically, their meaning is opposite. The first and last sentence are very different textually, using completely different words, but their meaning is very similar.
+## Repository Layout
 
-## Semantic organization
+- `crates/rimbun-api`: Axum HTTP API
+- `crates/rimbun-core`: shared domain types and core logic
+- `crates/rimbun-jobs`: background-job-oriented crate for later async processing
+- `crates/rimbun-embedding-client`: client crate for a future local embedding service
+- `web/`: Vue 3 + TypeScript frontend
+- `migrations/`: SQL migrations for Postgres
 
-Versions are organized according the meaning or impact. Essentially, we form clusters of versions with similar meaning or impact, and pick from each cluster the version that is semantically most similar to the other versions of the cluster. This version we call the representative version. Subsequently reducing the number of clusters, and therefore the number of representative versions, we can get a ranking of such versions. The one that is most representative of all versions is the main version. A few other versions that correspond to representative versions when there are only few clusters are called principal alternatives.
+## Development
 
-Readers will first see the main version, then the principal alternatives, and if they want to drill deeper, the other versions.
+### Prerequisites
 
-To rank versions, including identifying a main version and principal alternatives, we therefore need a way to measure similarity. The most important tools for these are AI and analysis of user feedback.
+- Rust stable toolchain
+- Node.js and npm
+- Docker with the Compose plugin
 
-AI, more precisely a large language model (LLM), can be used to turn a text into a vector that represents its meaning, known as embedding. Cosine simiarity is considered most suitable to indicate similarity. An open-source locally run model should be more than sufficient and most likely costs much less than using the most powerful models through online services.
+### 1. Start Postgres
 
-Similarity can also be assesssed through user feedback, such as up- and downvotes. Assuming that similar versions get voted on similarly by similar users, we can co-assess similarity of versions and users.
+```bash
+docker compose up -d
+```
 
-In summary, semantic organization decides which versions are most prominently shown to readers, by ranking versions and identifying a main version and principal alternatives. To decide how to show multiple versions side-by-side, we need text organization.
+This starts the local Postgres defined in [docker-compose.yml](./docker-compose.yml).
 
-## Text organization
+### 2. Create local environment configuration
 
-Different versions can be created independently, or by editing existing versions, while edits may be big or small. This means two versions can be entirely different, or they could have parts in common. The difference between two versions may be a small as using one blank instead of two.
+```bash
+cp .env.example .env
+```
 
-Each version to be shown - which means, initially the principal alternatives - is compared to the main version and significant portions that are identical are identified. A significant portion is one that is clearly long enough that it is unlikely to be identical by chance. A single word would typically not be a singificant portion, but an entire sentence would typically be. Finding such portions is called alignment. As a result of alignment, a version can be understood as an alternation between segments that are identical to segments of the main versions, and segments that are divergent. Complications ensue when a version has segments identical to segments of the main versions, but not in the same order.
+The defaults in [.env.example](./.env.example) are enough for local development:
 
-Effectively, the beginning and end of the text are treated like identical segments, even if everything else is different, as every text has a beginning and an end.
+```env
+DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/rimbun
+RIMBUN_PORT=3000
+SESSION_SECRET=change-me
+EMBEDDING_SERVICE_URL=http://127.0.0.1:8001
+```
 
-Textual similarity has two extremes: a version very similar to the main version may consist of two long identical segments interrupted by a short diverging segment. A version very different to the main version consists of a long diverging segment that contains the entire text, with begin and end segments of length zero. A version may also consist of a larger number of identical and diverging segments.
+The backend currently reads environment variables from the process environment, so load the file before starting the API:
 
-Sometimes, two versions may have two identical parts, and in the first version, these two parts are adjacent, but in the other version, there is some text between them. This is then a diverging segment that happens to have a length of zero in the first version.
+```bash
+set -a
+source .env
+set +a
+```
 
-Display in the simplest case boils down to this: show the main version and indicate where diverging segments compared to each principal alternative begin and end. When viewing diverging segments, allow browsing the different diverging versions side by side.
+### 3. Run the backend
 
-## Etymology
+```bash
+cargo run -p rimbun-api
+```
 
-The name Rimbun is an Indonesian word meaning thick when applied to things that grow, like hair or plants. The name symbolizes the richness of different versions that Rimbun can support.
+Notes:
+
+- the API listens on `127.0.0.1:3000` by default
+- database migrations run automatically on startup
+
+### 4. Run the frontend
+
+```bash
+cd web
+npm install
+npm run dev
+```
+
+The Vite dev server proxies `/api` requests to the Rust backend. Open the URL shown by Vite, typically:
+
+```text
+http://127.0.0.1:5173
+```
+
+### 5. First local workflow
+
+After registering the first account, it will be a normal user by default. To test outline editing, promote it manually in Postgres:
+
+```bash
+docker compose exec postgres psql -U postgres -d rimbun -c "select username, role from users;"
+docker compose exec postgres psql -U postgres -d rimbun -c "update users set role = 'privileged' where username = 'YOUR_USERNAME';"
+```
+
+Then:
+
+1. log in as that privileged user
+2. create a document
+3. create sections in the outline view
+4. open a section edit view and publish content
+5. use the reader and compare views
+
+## Production
+
+There is not yet a finished production deployment recipe in this repository, but the application can already be run in a simple production-style setup.
+
+### What you need
+
+- a Postgres database
+- environment variables set explicitly
+- the Rust API running as a long-lived process
+- the Vue frontend built into static files
+- ideally a reverse proxy such as nginx or Caddy in front
+
+### 1. Prepare environment variables
+
+Set real production values, especially:
+
+- `DATABASE_URL`
+- `SESSION_SECRET`
+- `RIMBUN_PORT`
+- `EMBEDDING_SERVICE_URL`
+
+Example:
+
+```bash
+export DATABASE_URL='postgres://USER:PASSWORD@DBHOST:5432/rimbun'
+export SESSION_SECRET='replace-with-a-long-random-secret'
+export RIMBUN_PORT=3000
+export EMBEDDING_SERVICE_URL='http://127.0.0.1:8001'
+```
+
+### 2. Build and run the backend
+
+```bash
+cargo build --release -p rimbun-api
+./target/release/rimbun-api
+```
+
+Notes:
+
+- migrations still run automatically on startup
+- the API currently serves only the backend, not the frontend assets
+
+### 3. Build the frontend
+
+```bash
+cd web
+npm install
+npm run build
+```
+
+This creates static assets in `web/dist/`.
+
+### 4. Serve the frontend
+
+Serve `web/dist/` from a static file server or reverse proxy, and route `/api` to the Rust backend.
+
+A production setup therefore usually looks like this:
+
+- `https://your-domain/` -> static files from `web/dist`
+- `https://your-domain/api/...` -> `rimbun-api`
+
+### Current production caveats
+
+- no Docker production stack is included yet
+- no systemd unit files or reverse-proxy config are included yet
+- no background jobs or embedding service are required for the current MVP flow
+- no horizontal scaling or session-store tuning has been done yet
+
+## Testing
+
+Backend:
+
+```bash
+cargo test -p rimbun-api
+```
+
+Frontend build check:
+
+```bash
+cd web
+npm run build
+```
+
+Frontend E2E tests:
+
+```bash
+cd web
+npm run test:e2e
+```
+
+## Roadmap Direction
+
+The next major product steps are likely to be:
+
+- richer compare and diff presentation
+- proper markdown rendering
+- semantic embeddings and `popsam`-based clustering
+- improved moderation and ranking behavior
+- a fuller production deployment story
+
+## Name
+
+Rimbun is an Indonesian word meaning thick when applied to things that grow, such as hair or plants. The name is meant to evoke richness and branching variation.
