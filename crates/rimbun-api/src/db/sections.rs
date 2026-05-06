@@ -164,6 +164,22 @@ async fn normalize_group_positions(
         target_position,
     );
 
+    // First move every sibling into a temporary negative range so the unique
+    // index on (document_id, parent_id, position) cannot trip during reordering.
+    for (index, section_id) in ordered_ids.iter().enumerate() {
+        sqlx::query(
+            r#"
+            update sections
+            set position = $2
+            where id = $1
+            "#,
+        )
+        .bind(section_id)
+        .bind(-((index as i32) + 1))
+        .execute(&mut **tx)
+        .await?;
+    }
+
     for (index, section_id) in ordered_ids.iter().enumerate() {
         sqlx::query(
             r#"
@@ -225,6 +241,10 @@ pub async fn move_section(
         section_id.to_string()
     };
 
+    // Park the moved section in a temporary negative slot first so that moving
+    // into an occupied sibling position cannot violate the unique index.
+    let temporary_position = -1_000_000_000;
+
     sqlx::query_as::<_, SectionRecord>(
         r#"
         update sections
@@ -236,7 +256,7 @@ pub async fn move_section(
     .bind(section_id)
     .bind(title)
     .bind(parent_id)
-    .bind(position)
+    .bind(temporary_position)
     .bind(&new_path)
     .fetch_one(&mut *tx)
     .await?;

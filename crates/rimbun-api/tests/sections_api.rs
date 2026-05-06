@@ -305,6 +305,67 @@ async fn patch_section_rejects_move_into_own_subtree() {
 }
 
 #[tokio::test]
+async fn patch_section_reorders_within_same_parent() {
+    let Some(pool) = test_pool().await else {
+        eprintln!("Skipping integration test: TEST_DATABASE_URL not set or unreachable");
+        return;
+    };
+    reset_schema(&pool).await;
+
+    let (user_id, session_token) = seed_privileged_user(&pool).await;
+    let (document_id, parent_a, parent_b, _child) = seed_document_tree(&pool, user_id).await;
+
+    let parent_c = uuid::Uuid::new_v4();
+    sqlx::query(
+        r#"
+        insert into sections (id, document_id, parent_id, title, position, path)
+        values ($1, $2, null, $3, $4, $5)
+        "#,
+    )
+    .bind(parent_c)
+    .bind(document_id)
+    .bind("Parent C")
+    .bind(2_i32)
+    .bind(parent_c.to_string())
+    .execute(&pool)
+    .await
+    .expect("insert third root section");
+
+    let app = app::build(test_config(
+        std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL"),
+    ))
+    .await
+    .expect("build app");
+
+    let request = Request::builder()
+        .method(Method::PATCH)
+        .uri(format!("/api/sections/{parent_a}"))
+        .header(header::COOKIE, format!("rimbun_session={session_token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            json!({
+                "title": "Parent A",
+                "parent_id": null,
+                "position": 1
+            })
+            .to_string(),
+        ))
+        .expect("request");
+
+    let response = app.oneshot(request).await.expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let root_positions = sqlx::query_as::<_, (uuid::Uuid, i32)>(
+        "select id, position from sections where document_id = $1 and parent_id is null order by position asc",
+    )
+    .bind(document_id)
+    .fetch_all(&pool)
+    .await
+    .expect("load root positions");
+    assert_eq!(root_positions, vec![(parent_b, 0), (parent_a, 1), (parent_c, 2)]);
+}
+
+#[tokio::test]
 async fn auth_register_me_logout_roundtrip_works_via_session_cookie() {
     let Some(pool) = test_pool().await else {
         eprintln!("Skipping integration test: TEST_DATABASE_URL not set or unreachable");

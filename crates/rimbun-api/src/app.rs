@@ -26,31 +26,31 @@ pub async fn build(config: Config) -> anyhow::Result<Router> {
             "/api/documents",
             get(crate::handlers::documents::list).post(crate::handlers::documents::create),
         )
-        .route("/api/documents/:id", get(crate::handlers::documents::show))
+        .route("/api/documents/{id}", get(crate::handlers::documents::show))
         .route(
-            "/api/documents/:id/sections",
+            "/api/documents/{id}/sections",
             post(crate::handlers::sections::create),
         )
         .route(
-            "/api/sections/:id",
+            "/api/sections/{id}",
             get(crate::handlers::sections::show).patch(crate::handlers::sections::update),
         )
-        .route("/api/sections/:id/view", get(crate::handlers::sections::view))
-        .route("/api/sections/:id/draft", put(crate::handlers::drafts::save))
+        .route("/api/sections/{id}/view", get(crate::handlers::sections::view))
+        .route("/api/sections/{id}/draft", put(crate::handlers::drafts::save))
         .route(
-            "/api/sections/:id/publish",
+            "/api/sections/{id}/publish",
             post(crate::handlers::submissions::publish),
         )
         .route(
-            "/api/sections/:id/submissions",
+            "/api/sections/{id}/submissions",
             get(crate::handlers::submissions::list),
         )
         .route(
-            "/api/sections/:id/preferences/base-submission",
+            "/api/sections/{id}/preferences/base-submission",
             put(crate::handlers::preferences::set_base),
         )
         .route(
-            "/api/submissions/:id/moderate",
+            "/api/submissions/{id}/moderate",
             post(crate::handlers::moderation::update),
         )
         .with_state(state);
