@@ -397,6 +397,12 @@ async fn auth_register_me_logout_roundtrip_works_via_session_cookie() {
     let register_response = app.clone().oneshot(register_request).await.expect("register response");
     assert_eq!(register_response.status(), StatusCode::OK);
     let cookie_header = session_cookie_header(register_response.headers());
+    let register_body = to_bytes(register_response.into_body(), usize::MAX)
+        .await
+        .expect("register body");
+    let register_json: serde_json::Value = serde_json::from_slice(&register_body).expect("register json");
+    assert_eq!(register_json["user"]["username"], "alice");
+    assert!(register_json["session_token"].is_string());
 
     let me_request = Request::builder()
         .method(Method::GET)
@@ -436,6 +442,33 @@ async fn auth_register_me_logout_roundtrip_works_via_session_cookie() {
         .await
         .expect("me after logout response");
     assert_eq!(me_after_logout_response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn me_accepts_session_header_for_account_switching() {
+    let Some(pool) = test_pool().await else {
+        eprintln!("Skipping integration test: TEST_DATABASE_URL not set or unreachable");
+        return;
+    };
+    reset_schema(&pool).await;
+
+    let (_user_id, session_token) = seed_user_with_role(&pool, "normal").await;
+
+    let app = app::build(test_config(
+        std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL"),
+    ))
+    .await
+    .expect("build app");
+
+    let me_request = Request::builder()
+        .method(Method::GET)
+        .uri("/api/me")
+        .header("x-rimbun-session", &session_token)
+        .body(Body::empty())
+        .expect("me request");
+
+    let me_response = app.oneshot(me_request).await.expect("me response");
+    assert_eq!(me_response.status(), StatusCode::OK);
 }
 
 #[tokio::test]

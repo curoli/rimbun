@@ -1,4 +1,6 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
+const SESSION_HEADER_NAME = "x-rimbun-session";
+let activeSessionToken: string | null = null;
 
 export class ApiError extends Error {
   status: number;
@@ -14,10 +16,21 @@ type RequestOptions = RequestInit & {
   bodyJson?: unknown;
 };
 
+export function setActiveSessionToken(token: string | null) {
+  activeSessionToken = token;
+}
+
+export function getActiveSessionToken() {
+  return activeSessionToken;
+}
+
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const headers = new Headers(options.headers);
   if (options.bodyJson !== undefined) {
     headers.set("Content-Type", "application/json");
+  }
+  if (activeSessionToken) {
+    headers.set(SESSION_HEADER_NAME, activeSessionToken);
   }
 
   const response = await fetch(`${API_BASE_URL}${path}`, {

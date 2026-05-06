@@ -13,7 +13,9 @@ use crate::{
         users::{self, NewUser, UserRecord},
     },
     error::ApiError,
-    http::extractors::{maybe_current_user, require_current_user, SESSION_COOKIE_NAME},
+    http::extractors::{
+        maybe_current_user, require_current_user, SESSION_COOKIE_NAME, SESSION_HEADER_NAME,
+    },
     state::AppState,
 };
 
@@ -39,6 +41,12 @@ pub struct UserResponse {
     pub email: String,
     pub role: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AuthResponse {
+    pub user: UserResponse,
+    pub session_token: String,
 }
 
 impl From<UserRecord> for UserResponse {
@@ -83,7 +91,7 @@ pub async fn me(
 pub async fn register(
     State(state): State<AppState>,
     Json(payload): Json<RegisterRequest>,
-) -> Result<(CookieJar, Json<UserResponse>), ApiError> {
+) -> Result<(CookieJar, Json<AuthResponse>), ApiError> {
     if payload.username.trim().is_empty()
         || payload.display_name.trim().is_empty()
         || payload.email.trim().is_empty()
@@ -127,13 +135,19 @@ pub async fn register(
 
     let jar = CookieJar::new().add(session_cookie(&session.token));
 
-    Ok((jar, Json(user.into())))
+    Ok((
+        jar,
+        Json(AuthResponse {
+            user: user.into(),
+            session_token: session.token,
+        }),
+    ))
 }
 
 pub async fn login(
     State(state): State<AppState>,
     Json(payload): Json<LoginRequest>,
-) -> Result<(CookieJar, Json<UserResponse>), ApiError> {
+) -> Result<(CookieJar, Json<AuthResponse>), ApiError> {
     let user = users::find_by_login_identifier(&state.pool, payload.identifier.trim())
         .await
         .map_err(|err| ApiError::internal(err.to_string()))?
@@ -159,7 +173,13 @@ pub async fn login(
 
     let jar = CookieJar::new().add(session_cookie(&session.token));
 
-    Ok((jar, Json(user.into())))
+    Ok((
+        jar,
+        Json(AuthResponse {
+            user: user.into(),
+            session_token: session.token,
+        }),
+    ))
 }
 
 pub async fn logout(
@@ -168,16 +188,29 @@ pub async fn logout(
 ) -> Result<(CookieJar, Json<serde_json::Value>), ApiError> {
     let _ = maybe_current_user(State(state.clone()), &headers).await?;
 
-    if let Some(raw_cookie) = headers.get(axum::http::header::COOKIE).and_then(|value| value.to_str().ok()) {
-        if let Some((_, token)) = raw_cookie
-            .split(';')
-            .filter_map(|part| part.trim().split_once('='))
-            .find(|(name, _)| *name == SESSION_COOKIE_NAME)
-        {
-            sessions::delete_by_token(&state.pool, token)
-                .await
-                .map_err(|err| ApiError::internal(err.to_string()))?;
-        }
+    let session_token = headers
+        .get(SESSION_HEADER_NAME)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            headers
+                .get(axum::http::header::COOKIE)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|raw_cookie| {
+                    raw_cookie
+                        .split(';')
+                        .filter_map(|part| part.trim().split_once('='))
+                        .find(|(name, _)| *name == SESSION_COOKIE_NAME)
+                        .map(|(_, token)| token.to_owned())
+                })
+        });
+
+    if let Some(token) = session_token {
+        sessions::delete_by_token(&state.pool, &token)
+            .await
+            .map_err(|err| ApiError::internal(err.to_string()))?;
     }
 
     let jar = CookieJar::new().add(removal_cookie());

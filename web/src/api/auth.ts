@@ -1,5 +1,5 @@
 import { apiRequest } from "./client";
-import type { User } from "./types";
+import type { AuthSession, User } from "./types";
 
 export type RegisterPayload = {
   username: string;
@@ -14,14 +14,14 @@ export type LoginPayload = {
 };
 
 export function register(payload: RegisterPayload) {
-  return apiRequest<User>("/api/auth/register", {
+  return apiRequest<AuthSession>("/api/auth/register", {
     method: "POST",
     bodyJson: payload,
   });
 }
 
 export function login(payload: LoginPayload) {
-  return apiRequest<User>("/api/auth/login", {
+  return apiRequest<AuthSession>("/api/auth/login", {
     method: "POST",
     bodyJson: payload,
   });

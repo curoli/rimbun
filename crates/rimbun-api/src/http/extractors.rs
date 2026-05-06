@@ -7,6 +7,7 @@ use crate::{
 };
 
 pub const SESSION_COOKIE_NAME: &str = "rimbun_session";
+pub const SESSION_HEADER_NAME: &str = "x-rimbun-session";
 
 fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
     let raw_cookie = headers.get(axum::http::header::COOKIE)?.to_str().ok()?;
@@ -22,11 +23,21 @@ fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
     })
 }
 
+fn session_token(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(SESSION_HEADER_NAME)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| cookie_value(headers, SESSION_COOKIE_NAME))
+}
+
 pub async fn maybe_current_user(
     State(state): State<AppState>,
     headers: &HeaderMap,
 ) -> Result<Option<users::UserRecord>, ApiError> {
-    let Some(session_token) = cookie_value(headers, SESSION_COOKIE_NAME) else {
+    let Some(session_token) = session_token(headers) else {
         return Ok(None);
     };
 

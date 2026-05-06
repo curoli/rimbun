@@ -7,6 +7,11 @@ export type User = {
   created_at: string;
 };
 
+export type AuthSession = {
+  user: User;
+  session_token: string;
+};
+
 export type DocumentRecord = {
   id: string;
   slug: string;

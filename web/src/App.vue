@@ -12,7 +12,7 @@ const accountMenuRef = ref<HTMLElement | null>(null);
 
 const isAuthPage = computed(() => route.path.startsWith("/login"));
 const canManageAccounts = computed(() =>
-  auth.user ? ["privileged", "admin"].includes(auth.user.role) : false,
+  auth.availableAccounts.some((account) => ["privileged", "admin"].includes(account.user.role)),
 );
 
 function toggleAccountMenu() {
@@ -34,9 +34,14 @@ async function handleAddAccount() {
   await router.push({ path: "/login", query: { mode: "register" } });
 }
 
-async function handleSwitchUser() {
+async function handleLoginAnotherUser() {
   closeAccountMenu();
   await router.push({ path: "/login", query: { mode: "login" } });
+}
+
+async function handleSwitchToAccount(sessionToken: string) {
+  await auth.switchAccount(sessionToken);
+  closeAccountMenu();
 }
 
 function handleDocumentClick(event: MouseEvent) {
@@ -85,9 +90,27 @@ onBeforeUnmount(() => {
               <span class="role-badge">{{ auth.user.role }}</span>
             </div>
 
-            <button type="button" class="menu-item" @click="handleSwitchUser">
-              Switch user
-              <small>Go to login and activate another account.</small>
+            <div v-if="auth.availableAccounts.length" class="account-list">
+              <span class="account-list-label">Available accounts</span>
+              <button
+                v-for="account in auth.availableAccounts"
+                :key="account.sessionToken"
+                type="button"
+                class="menu-item"
+                :class="{ selected: account.sessionToken === auth.activeSessionToken }"
+                @click="handleSwitchToAccount(account.sessionToken)"
+              >
+                {{ account.user.display_name }} @{{ account.user.username }}
+                <small>
+                  {{ account.user.role }}
+                  <template v-if="account.sessionToken === auth.activeSessionToken"> • active</template>
+                </small>
+              </button>
+            </div>
+
+            <button type="button" class="menu-item" @click="handleLoginAnotherUser">
+              Log in existing account
+              <small>Authenticate an already existing user and keep it available in this browser.</small>
             </button>
 
             <button
@@ -96,13 +119,13 @@ onBeforeUnmount(() => {
               class="menu-item"
               @click="handleAddAccount"
             >
-              Add account
-              <small>Privileged users can add another available account.</small>
+              Create new account
+              <small>Create another user account and keep it available in this browser.</small>
             </button>
 
             <button type="button" class="menu-item danger" @click="handleLogout">
-              Logout
-              <small>End the current browser session.</small>
+              Logout current account
+              <small>End only the currently active account session.</small>
             </button>
           </div>
         </div>
@@ -234,6 +257,20 @@ select {
   border-bottom: 1px solid rgba(35, 24, 15, 0.08);
 }
 
+.account-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.account-list-label {
+  padding: 0 0.4rem;
+  color: #705948;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
 .account-summary span {
   color: #705948;
 }
@@ -267,6 +304,10 @@ select {
 
 .menu-item:hover {
   background: #f5e7d5;
+}
+
+.menu-item.selected {
+  background: #f1dcc4;
 }
 
 .menu-item small {
