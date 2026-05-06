@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { reactive, ref } from "vue";
-import { useRouter } from "vue-router";
+import { reactive, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 
 import { useAuthStore } from "../stores/auth";
 
 const auth = useAuthStore();
 const router = useRouter();
+const route = useRoute();
 const mode = ref<"login" | "register">("login");
 
 const loginForm = reactive({
@@ -28,6 +29,14 @@ async function submit() {
   }
   await router.push("/");
 }
+
+watch(
+  () => route.query.mode,
+  (rawMode) => {
+    mode.value = rawMode === "register" ? "register" : "login";
+  },
+  { immediate: true },
+);
 </script>
 
 <template>

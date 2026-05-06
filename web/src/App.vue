@@ -1,16 +1,66 @@
 <script setup lang="ts">
-import { computed, onMounted } from "vue";
-import { RouterLink, RouterView, useRoute } from "vue-router";
+import { computed, onMounted, onBeforeUnmount, ref } from "vue";
+import { RouterLink, RouterView, useRoute, useRouter } from "vue-router";
 
 import { useAuthStore } from "./stores/auth";
 
 const auth = useAuthStore();
 const route = useRoute();
+const router = useRouter();
+const accountMenuOpen = ref(false);
+const accountMenuRef = ref<HTMLElement | null>(null);
 
 const isAuthPage = computed(() => route.path.startsWith("/login"));
+const canManageAccounts = computed(() =>
+  auth.user ? ["privileged", "admin"].includes(auth.user.role) : false,
+);
+
+function toggleAccountMenu() {
+  accountMenuOpen.value = !accountMenuOpen.value;
+}
+
+function closeAccountMenu() {
+  accountMenuOpen.value = false;
+}
+
+async function handleLogout() {
+  await auth.logout();
+  closeAccountMenu();
+  await router.push("/login");
+}
+
+async function handleAddAccount() {
+  closeAccountMenu();
+  await router.push({ path: "/login", query: { mode: "register" } });
+}
+
+async function handleSwitchUser() {
+  closeAccountMenu();
+  await router.push({ path: "/login", query: { mode: "login" } });
+}
+
+function handleDocumentClick(event: MouseEvent) {
+  if (!accountMenuOpen.value || !accountMenuRef.value) {
+    return;
+  }
+
+  const target = event.target;
+  if (!(target instanceof Node)) {
+    return;
+  }
+
+  if (!accountMenuRef.value.contains(target)) {
+    closeAccountMenu();
+  }
+}
 
 onMounted(() => {
   void auth.restoreSession();
+  document.addEventListener("click", handleDocumentClick);
+});
+
+onBeforeUnmount(() => {
+  document.removeEventListener("click", handleDocumentClick);
 });
 </script>
 
@@ -19,10 +69,43 @@ onMounted(() => {
     <header v-if="!isAuthPage" class="topbar">
       <RouterLink class="brand" to="/">Rimbun</RouterLink>
       <div class="topbar-meta">
-        <span v-if="auth.user" class="identity">
-          {{ auth.user.display_name }}
-          <small>@{{ auth.user.username }}</small>
-        </span>
+        <div v-if="auth.user" ref="accountMenuRef" class="account-menu">
+          <button class="account-trigger" type="button" @click.stop="toggleAccountMenu">
+            <span class="identity">
+              {{ auth.user.display_name }}
+              <small>@{{ auth.user.username }}</small>
+            </span>
+            <span class="account-chevron">{{ accountMenuOpen ? "▲" : "▼" }}</span>
+          </button>
+
+          <div v-if="accountMenuOpen" class="account-dropdown">
+            <div class="account-summary">
+              <strong>{{ auth.user.display_name }}</strong>
+              <span>@{{ auth.user.username }}</span>
+              <span class="role-badge">{{ auth.user.role }}</span>
+            </div>
+
+            <button type="button" class="menu-item" @click="handleSwitchUser">
+              Switch user
+              <small>Go to login and activate another account.</small>
+            </button>
+
+            <button
+              v-if="canManageAccounts"
+              type="button"
+              class="menu-item"
+              @click="handleAddAccount"
+            >
+              Add account
+              <small>Privileged users can add another available account.</small>
+            </button>
+
+            <button type="button" class="menu-item danger" @click="handleLogout">
+              Logout
+              <small>End the current browser session.</small>
+            </button>
+          </div>
+        </div>
         <RouterLink v-else class="topbar-link" to="/login">Login</RouterLink>
       </div>
     </header>
@@ -96,6 +179,21 @@ select {
   gap: 1rem;
 }
 
+.account-menu {
+  position: relative;
+}
+
+.account-trigger {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  border: 0;
+  border-radius: 1rem;
+  padding: 0.55rem 0.75rem;
+  background: rgba(255, 255, 255, 0.72);
+  cursor: pointer;
+}
+
 .identity {
   display: flex;
   flex-direction: column;
@@ -105,6 +203,78 @@ select {
 
 .identity small {
   color: #705948;
+}
+
+.account-chevron {
+  color: #705948;
+  font-size: 0.72rem;
+}
+
+.account-dropdown {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.55rem);
+  min-width: 280px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 0.8rem;
+  border-radius: 1rem;
+  background: rgba(255, 252, 247, 0.98);
+  box-shadow:
+    0 18px 40px rgba(35, 24, 15, 0.12),
+    inset 0 0 0 1px rgba(35, 24, 15, 0.08);
+}
+
+.account-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.35rem 0.4rem 0.6rem;
+  border-bottom: 1px solid rgba(35, 24, 15, 0.08);
+}
+
+.account-summary span {
+  color: #705948;
+}
+
+.role-badge {
+  display: inline-flex;
+  width: fit-content;
+  margin-top: 0.2rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 999px;
+  background: #f1dcc4;
+  color: #5f3b1c;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.68rem;
+}
+
+.menu-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  width: 100%;
+  border: 0;
+  border-radius: 0.85rem;
+  padding: 0.75rem 0.8rem;
+  text-align: left;
+  background: transparent;
+  color: #2d1d12;
+  cursor: pointer;
+}
+
+.menu-item:hover {
+  background: #f5e7d5;
+}
+
+.menu-item small {
+  color: #705948;
+}
+
+.menu-item.danger {
+  color: #8e2616;
 }
 
 .topbar-link {
