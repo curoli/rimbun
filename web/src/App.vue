@@ -90,6 +90,11 @@ onBeforeUnmount(() => {
               <span class="role-badge">{{ auth.user.role }}</span>
             </div>
 
+            <RouterLink class="menu-link" to="/profile" @click="closeAccountMenu">
+              Your profile
+              <small>View your account details and change display name or password.</small>
+            </RouterLink>
+
             <div v-if="auth.availableAccounts.length" class="account-list">
               <span class="account-list-label">Available accounts</span>
               <button
@@ -302,7 +307,22 @@ select {
   cursor: pointer;
 }
 
+.menu-link {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  width: 100%;
+  border-radius: 0.85rem;
+  padding: 0.75rem 0.8rem;
+  text-align: left;
+  color: #2d1d12;
+}
+
 .menu-item:hover {
+  background: #f5e7d5;
+}
+
+.menu-link:hover {
   background: #f5e7d5;
 }
 
@@ -311,6 +331,10 @@ select {
 }
 
 .menu-item small {
+  color: #705948;
+}
+
+.menu-link small {
   color: #705948;
 }
 

@@ -33,6 +33,17 @@ pub struct LoginRequest {
     pub password: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct UpdateMeRequest {
+    pub display_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ChangePasswordRequest {
+    pub current_password: String,
+    pub new_password: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct UserResponse {
     pub id: uuid::Uuid,
@@ -86,6 +97,59 @@ pub async fn me(
 ) -> Result<Json<UserResponse>, ApiError> {
     let user = require_current_user(state, &headers).await?;
     Ok(Json(user.into()))
+}
+
+pub async fn update_me(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<UpdateMeRequest>,
+) -> Result<Json<UserResponse>, ApiError> {
+    let user = require_current_user(State(state.clone()), &headers).await?;
+
+    if payload.display_name.trim().is_empty() {
+        return Err(ApiError::bad_request("display name is required"));
+    }
+
+    let updated = users::update_display_name(&state.pool, user.id, payload.display_name.trim())
+        .await
+        .map_err(|err| ApiError::internal(err.to_string()))?
+        .ok_or_else(|| ApiError::not_found("user not found"))?;
+
+    Ok(Json(updated.into()))
+}
+
+pub async fn change_password(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<ChangePasswordRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user = require_current_user(State(state.clone()), &headers).await?;
+
+    if payload.new_password.len() < 8 {
+        return Err(ApiError::bad_request(
+            "new password must be at least 8 characters long",
+        ));
+    }
+
+    let parsed_hash =
+        PasswordHash::new(&user.password_hash).map_err(|err| ApiError::internal(err.to_string()))?;
+
+    Argon2::default()
+        .verify_password(payload.current_password.as_bytes(), &parsed_hash)
+        .map_err(|_| ApiError::unauthorized("current password is incorrect"))?;
+
+    let salt = SaltString::generate(&mut OsRng);
+    let password_hash = Argon2::default()
+        .hash_password(payload.new_password.as_bytes(), &salt)
+        .map_err(|err| ApiError::internal(err.to_string()))?
+        .to_string();
+
+    let _updated = users::update_password_hash(&state.pool, user.id, &password_hash)
+        .await
+        .map_err(|err| ApiError::internal(err.to_string()))?
+        .ok_or_else(|| ApiError::not_found("user not found"))?;
+
+    Ok(Json(serde_json::json!({ "status": "ok" })))
 }
 
 pub async fn register(

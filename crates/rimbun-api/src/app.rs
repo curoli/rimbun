@@ -18,7 +18,11 @@ pub async fn build(config: Config) -> anyhow::Result<Router> {
 
     let router = Router::new()
         .route("/health", get(|| async { "ok" }))
-        .route("/api/me", get(crate::handlers::auth::me))
+        .route("/api/me", get(crate::handlers::auth::me).patch(crate::handlers::auth::update_me))
+        .route(
+            "/api/me/change-password",
+            post(crate::handlers::auth::change_password),
+        )
         .route("/api/auth/register", post(crate::handlers::auth::register))
         .route("/api/auth/login", post(crate::handlers::auth::login))
         .route("/api/auth/logout", post(crate::handlers::auth::logout))

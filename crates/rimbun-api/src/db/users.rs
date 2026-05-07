@@ -74,3 +74,45 @@ pub async fn find_by_login_identifier(
 
     Ok(record)
 }
+
+pub async fn update_display_name(
+    pool: &PgPool,
+    user_id: uuid::Uuid,
+    display_name: &str,
+) -> anyhow::Result<Option<UserRecord>> {
+    let record = sqlx::query_as::<_, UserRecord>(
+        r#"
+        update users
+        set display_name = $2
+        where id = $1
+        returning id, username, display_name, email, password_hash, role, created_at
+        "#,
+    )
+    .bind(user_id)
+    .bind(display_name)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(record)
+}
+
+pub async fn update_password_hash(
+    pool: &PgPool,
+    user_id: uuid::Uuid,
+    password_hash: &str,
+) -> anyhow::Result<Option<UserRecord>> {
+    let record = sqlx::query_as::<_, UserRecord>(
+        r#"
+        update users
+        set password_hash = $2
+        where id = $1
+        returning id, username, display_name, email, password_hash, role, created_at
+        "#,
+    )
+    .bind(user_id)
+    .bind(password_hash)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(record)
+}

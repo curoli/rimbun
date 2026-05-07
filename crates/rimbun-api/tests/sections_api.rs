@@ -445,6 +445,94 @@ async fn auth_register_me_logout_roundtrip_works_via_session_cookie() {
 }
 
 #[tokio::test]
+async fn auth_profile_update_and_password_change_work() {
+    let Some(pool) = test_pool().await else {
+        eprintln!("Skipping integration test: TEST_DATABASE_URL not set or unreachable");
+        return;
+    };
+    reset_schema(&pool).await;
+
+    let app = app::build(test_config(
+        std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL"),
+    ))
+    .await
+    .expect("build app");
+
+    let register_request = Request::builder()
+        .method(Method::POST)
+        .uri("/api/auth/register")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            json!({
+                "username": "bob",
+                "display_name": "Bob",
+                "email": "bob@example.test",
+                "password": "correct horse battery staple"
+            })
+            .to_string(),
+        ))
+        .expect("register request");
+
+    let register_response = app.clone().oneshot(register_request).await.expect("register response");
+    assert_eq!(register_response.status(), StatusCode::OK);
+    let cookie_header = session_cookie_header(register_response.headers());
+
+    let update_me_request = Request::builder()
+        .method(Method::PATCH)
+        .uri("/api/me")
+        .header(header::COOKIE, &cookie_header)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(json!({ "display_name": "Bobby" }).to_string()))
+        .expect("update me request");
+
+    let update_me_response = app.clone().oneshot(update_me_request).await.expect("update me response");
+    assert_eq!(update_me_response.status(), StatusCode::OK);
+    let update_me_body = to_bytes(update_me_response.into_body(), usize::MAX)
+        .await
+        .expect("update me body");
+    let update_me_json: serde_json::Value =
+        serde_json::from_slice(&update_me_body).expect("update me json");
+    assert_eq!(update_me_json["display_name"], "Bobby");
+
+    let change_password_request = Request::builder()
+        .method(Method::POST)
+        .uri("/api/me/change-password")
+        .header(header::COOKIE, &cookie_header)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            json!({
+                "current_password": "correct horse battery staple",
+                "new_password": "new correct horse battery staple"
+            })
+            .to_string(),
+        ))
+        .expect("change password request");
+
+    let change_password_response = app
+        .clone()
+        .oneshot(change_password_request)
+        .await
+        .expect("change password response");
+    assert_eq!(change_password_response.status(), StatusCode::OK);
+
+    let login_request = Request::builder()
+        .method(Method::POST)
+        .uri("/api/auth/login")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            json!({
+                "identifier": "bob",
+                "password": "new correct horse battery staple"
+            })
+            .to_string(),
+        ))
+        .expect("login request");
+
+    let login_response = app.oneshot(login_request).await.expect("login response");
+    assert_eq!(login_response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
 async fn me_accepts_session_header_for_account_switching() {
     let Some(pool) = test_pool().await else {
         eprintln!("Skipping integration test: TEST_DATABASE_URL not set or unreachable");

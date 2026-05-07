@@ -151,6 +151,15 @@ export const useAuthStore = defineStore("auth", {
       setActiveSessionToken(authSession.session_token);
       persistAccounts(this.availableAccounts, this.activeSessionToken);
     },
+    updateCurrentUser(user: User) {
+      this.user = user;
+      if (this.activeSessionToken) {
+        this.availableAccounts = this.availableAccounts.map((account) =>
+          account.sessionToken === this.activeSessionToken ? { ...account, user } : account,
+        );
+        persistAccounts(this.availableAccounts, this.activeSessionToken);
+      }
+    },
     removeAccount(sessionToken: string) {
       this.availableAccounts = this.availableAccounts.filter((account) => account.sessionToken !== sessionToken);
       if (this.activeSessionToken === sessionToken) {
@@ -170,10 +179,7 @@ export const useAuthStore = defineStore("auth", {
         setActiveSessionToken(this.activeSessionToken);
         this.user = await authApi.me();
         if (this.activeSessionToken && this.user) {
-          this.availableAccounts = this.availableAccounts.map((account) =>
-            account.sessionToken === this.activeSessionToken ? { ...account, user: this.user as User } : account,
-          );
-          persistAccounts(this.availableAccounts, this.activeSessionToken);
+          this.updateCurrentUser(this.user);
         }
       } catch (error) {
         if (!(error instanceof ApiError) || error.status !== 401) {
@@ -224,11 +230,7 @@ export const useAuthStore = defineStore("auth", {
         this.activeSessionToken = sessionToken;
         setActiveSessionToken(sessionToken);
         const user = await authApi.me();
-        this.user = user;
-        this.availableAccounts = this.availableAccounts.map((account) =>
-          account.sessionToken === sessionToken ? { ...account, user } : account,
-        );
-        persistAccounts(this.availableAccounts, this.activeSessionToken);
+        this.updateCurrentUser(user);
       } catch (error) {
         this.removeAccount(sessionToken);
         setActiveSessionToken(this.activeSessionToken);
@@ -252,13 +254,8 @@ export const useAuthStore = defineStore("auth", {
         if (nextAccount) {
           this.activeSessionToken = nextAccount.sessionToken;
           setActiveSessionToken(nextAccount.sessionToken);
-          this.user = await authApi.me();
-          this.availableAccounts = this.availableAccounts.map((account) =>
-            account.sessionToken === nextAccount.sessionToken
-              ? { ...account, user: this.user as User }
-              : account,
-          );
-          persistAccounts(this.availableAccounts, this.activeSessionToken);
+          const user = await authApi.me();
+          this.updateCurrentUser(user);
         } else {
           this.activeSessionToken = null;
           this.user = null;

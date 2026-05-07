@@ -36,3 +36,17 @@ export function logout() {
 export function me() {
   return apiRequest<User>("/api/me");
 }
+
+export function updateProfile(payload: { display_name: string }) {
+  return apiRequest<User>("/api/me", {
+    method: "PATCH",
+    bodyJson: payload,
+  });
+}
+
+export function changePassword(payload: { current_password: string; new_password: string }) {
+  return apiRequest<{ status: string }>("/api/me/change-password", {
+    method: "POST",
+    bodyJson: payload,
+  });
+}
