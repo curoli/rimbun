@@ -28,7 +28,7 @@ pub async fn update(
 ) -> Result<Json<moderation::ModerationRecord>, ApiError> {
     let user = require_current_user(State(state.clone()), &headers).await?;
     if !matches!(user.role.as_str(), "privileged" | "admin") {
-        return Err(ApiError::forbidden("privileged role required"));
+        return Err(ApiError::forbidden("admin role required"));
     }
 
     let submission = submissions::find_by_id(&state.pool, submission_id)

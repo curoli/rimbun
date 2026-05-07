@@ -12,7 +12,7 @@ const accountMenuRef = ref<HTMLElement | null>(null);
 
 const isAuthPage = computed(() => route.path.startsWith("/login"));
 const canManageAccounts = computed(() =>
-  auth.availableAccounts.some((account) => ["privileged", "admin"].includes(account.user.role)),
+  auth.user ? ["privileged", "admin"].includes(auth.user.role) : false,
 );
 
 function toggleAccountMenu() {
@@ -93,6 +93,16 @@ onBeforeUnmount(() => {
             <RouterLink class="menu-link" to="/profile" @click="closeAccountMenu">
               Your profile
               <small>View your account details and change display name or password.</small>
+            </RouterLink>
+
+            <RouterLink
+              v-if="canManageAccounts"
+              class="menu-link"
+              to="/admin/users"
+              @click="closeAccountMenu"
+            >
+              User administration
+              <small>See all registered users.</small>
             </RouterLink>
 
             <div v-if="auth.availableAccounts.length" class="account-list">

@@ -23,6 +23,7 @@ pub async fn build(config: Config) -> anyhow::Result<Router> {
             "/api/me/change-password",
             post(crate::handlers::auth::change_password),
         )
+        .route("/api/users", get(crate::handlers::users::list))
         .route("/api/auth/register", post(crate::handlers::auth::register))
         .route("/api/auth/login", post(crate::handlers::auth::login))
         .route("/api/auth/logout", post(crate::handlers::auth::logout))

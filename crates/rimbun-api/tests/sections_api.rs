@@ -560,6 +560,41 @@ async fn me_accepts_session_header_for_account_switching() {
 }
 
 #[tokio::test]
+async fn admin_can_list_all_users() {
+    let Some(pool) = test_pool().await else {
+        eprintln!("Skipping integration test: TEST_DATABASE_URL not set or unreachable");
+        return;
+    };
+    reset_schema(&pool).await;
+
+    let (_admin_id, admin_session) = seed_privileged_user(&pool).await;
+    let (_normal_id, _normal_session) = seed_user_with_role(&pool, "normal").await;
+
+    let app = app::build(test_config(
+        std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL"),
+    ))
+    .await
+    .expect("build app");
+
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri("/api/users")
+        .header(header::COOKIE, format!("rimbun_session={admin_session}"))
+        .body(Body::empty())
+        .expect("request");
+
+    let response = app.oneshot(request).await.expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read body");
+    let users: Vec<serde_json::Value> = serde_json::from_slice(&body).expect("users json");
+    assert!(users.len() >= 2);
+    assert!(users.iter().any(|user| user["role"] == "admin"));
+}
+
+#[tokio::test]
 async fn publish_rebuilds_projection_and_supersedes_previous_submission() {
     let Some(pool) = test_pool().await else {
         eprintln!("Skipping integration test: TEST_DATABASE_URL not set or unreachable");

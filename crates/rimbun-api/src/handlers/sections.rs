@@ -43,7 +43,7 @@ pub async fn create(
 ) -> Result<Json<sections::SectionRecord>, ApiError> {
     let user = require_current_user(State(state.clone()), &headers).await?;
     if !matches!(user.role.as_str(), "privileged" | "admin") {
-        return Err(ApiError::forbidden("privileged role required"));
+        return Err(ApiError::forbidden("admin role required"));
     }
 
     let _document = documents::find_by_id(&state.pool, document_id)
@@ -119,7 +119,7 @@ pub async fn update(
 ) -> Result<Json<sections::SectionRecord>, ApiError> {
     let user = require_current_user(State(state.clone()), &headers).await?;
     if !matches!(user.role.as_str(), "privileged" | "admin") {
-        return Err(ApiError::forbidden("privileged role required"));
+        return Err(ApiError::forbidden("admin role required"));
     }
 
     let current = sections::find_by_id(&state.pool, id)

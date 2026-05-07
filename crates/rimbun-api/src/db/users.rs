@@ -116,3 +116,17 @@ pub async fn update_password_hash(
 
     Ok(record)
 }
+
+pub async fn list_all(pool: &PgPool) -> anyhow::Result<Vec<UserRecord>> {
+    let records = sqlx::query_as::<_, UserRecord>(
+        r#"
+        select id, username, display_name, email, password_hash, role, created_at
+        from users
+        order by created_at asc, username asc
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(records)
+}

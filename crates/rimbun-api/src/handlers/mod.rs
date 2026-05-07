@@ -5,3 +5,4 @@ pub mod moderation;
 pub mod preferences;
 pub mod sections;
 pub mod submissions;
+pub mod users;

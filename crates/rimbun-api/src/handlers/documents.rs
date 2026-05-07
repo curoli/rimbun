@@ -46,7 +46,7 @@ pub async fn create(
     let user = require_current_user(State(state.clone()), &headers).await?;
 
     if !matches!(user.role.as_str(), "privileged" | "admin") {
-        return Err(ApiError::forbidden("privileged role required"));
+        return Err(ApiError::forbidden("admin role required"));
     }
 
     if payload.slug.trim().is_empty() || payload.title.trim().is_empty() {
