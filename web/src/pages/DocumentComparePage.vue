@@ -3,10 +3,21 @@ import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
 import { getDocument, getSectionView } from "../api/documents";
-import type { DocumentDetailResponse, SectionRecord, SectionViewResponse } from "../api/types";
+import type {
+  DocumentDetailResponse,
+  ProjectionItemRecord,
+  SectionRecord,
+  SectionViewResponse,
+  SubmissionRecord,
+} from "../api/types";
 import DocumentViewNav from "../components/DocumentViewNav.vue";
 import SectionTree from "../components/SectionTree.vue";
 import { useAuthStore } from "../stores/auth";
+
+type RankedSubmission = {
+  submission: SubmissionRecord;
+  projection: ProjectionItemRecord;
+};
 
 const route = useRoute();
 const router = useRouter();
@@ -52,21 +63,30 @@ const orderedSections = computed(() => {
 const compareSections = computed(() =>
   orderedSections.value.map((section) => {
     const view = sectionViews.value[section.id];
-    const main =
-      view?.active_submissions.find(
-        (submission) => view.projection.find((item) => item.submission_id === submission.id)?.role === "main",
-      ) ?? view?.active_submissions[0] ?? null;
-    const alternatives =
-      view?.active_submissions.filter(
-        (submission) =>
-          view.projection.find((item) => item.submission_id === submission.id)?.role === "principal_alternative",
-      ) ?? [];
+    if (!view) {
+      return {
+        section,
+        ranked: [] as RankedSubmission[],
+      };
+    }
 
-    return { section, main, alternatives };
+    const submissionById = new Map(view.active_submissions.map((submission) => [submission.id, submission]));
+    const ranked = view.projection
+      .map((projection) => {
+        const submission = submissionById.get(projection.submission_id);
+        return submission ? { submission, projection } : null;
+      })
+      .filter((entry): entry is RankedSubmission => entry !== null)
+      .sort((left, right) => left.projection.rank - right.projection.rank);
+
+    return {
+      section,
+      ranked,
+    };
   }),
 );
 
-function submissionLabel(submission: SectionViewResponse["active_submissions"][number]) {
+function submissionLabel(submission: SubmissionRecord) {
   return `${submission.display_name} @${submission.username} • ${new Date(submission.published_at).toLocaleString()}`;
 }
 
@@ -81,9 +101,10 @@ async function loadDocument() {
   try {
     const data = await getDocument(id);
     documentData.value = data;
-    selectedSectionId.value = selectedSectionId.value && data.sections.some((s) => s.id === selectedSectionId.value)
-      ? selectedSectionId.value
-      : data.sections[0]?.id ?? null;
+    selectedSectionId.value =
+      selectedSectionId.value && data.sections.some((section) => section.id === selectedSectionId.value)
+        ? selectedSectionId.value
+        : data.sections[0]?.id ?? null;
     await loadSectionViews(data.sections.map((section) => section.id));
   } catch (loadError) {
     error.value = loadError instanceof Error ? loadError.message : "Failed to load document";
@@ -158,11 +179,11 @@ onMounted(async () => {
         <section class="compare-panel">
           <div class="compare-panel-header">
             <div>
-              <p class="eyebrow">Compare View</p>
-              <h2>Main version and principal alternatives</h2>
+              <p class="eyebrow">Compare</p>
+              <h2>Ranked versions</h2>
             </div>
             <p class="compare-copy">
-              This first compare slice is section-based: it shows the global main version next to the principal alternatives.
+              Versions are ordered by the current `popsam` result.
             </p>
           </div>
 
@@ -176,34 +197,29 @@ onMounted(async () => {
               :class="{ active: item.section.id === selectedSectionId }"
             >
               <header class="compare-section-header">
-                <div>
-                  <span class="section-kicker">Section</span>
-                  <h3>{{ item.section.title }}</h3>
-                </div>
+                <h3>{{ item.section.title }}</h3>
                 <RouterLink class="edit-link" :to="`/sections/${item.section.id}/edit`">
                   Edit this section
                 </RouterLink>
               </header>
 
-              <div class="compare-grid">
-                <section class="compare-card main">
-                  <p class="card-label">Global Main Version</p>
-                  <strong v-if="item.main">{{ submissionLabel(item.main) }}</strong>
-                  <p v-else class="empty-note">No published version yet.</p>
-                  <pre v-if="item.main">{{ item.main.markdown_content }}</pre>
-                </section>
-
-                <section class="compare-card">
-                  <p class="card-label">Principal Alternatives</p>
-                  <div v-if="item.alternatives.length" class="alternatives">
-                    <article v-for="alternative in item.alternatives" :key="alternative.id" class="alternative-card">
-                      <strong>{{ submissionLabel(alternative) }}</strong>
-                      <pre>{{ alternative.markdown_content }}</pre>
-                    </article>
+              <div v-if="item.ranked.length" class="ranked-list">
+                <article
+                  v-for="entry in item.ranked"
+                  :key="entry.submission.id"
+                  class="ranked-card"
+                  :class="{ main: entry.projection.role === 'main' }"
+                >
+                  <div class="card-header">
+                    <strong class="variant-meta">
+                      <span class="rank-marker">{{ entry.projection.rank + 1 }}</span>
+                      <span>{{ submissionLabel(entry.submission) }}</span>
+                    </strong>
                   </div>
-                  <p v-else class="empty-note">No principal alternatives yet.</p>
-                </section>
+                  <pre>{{ entry.submission.markdown_content }}</pre>
+                </article>
               </div>
+              <p v-else class="empty-note">No published version yet.</p>
             </article>
           </div>
         </section>
@@ -217,8 +233,7 @@ onMounted(async () => {
 
 .compare-panel,
 .compare-section,
-.compare-card,
-.alternative-card {
+.ranked-card {
   border: 1px solid rgba(35, 24, 15, 0.08);
 }
 
@@ -232,7 +247,8 @@ onMounted(async () => {
 }
 
 .compare-panel-header,
-.compare-section-header {
+.compare-section-header,
+.card-header {
   display: flex;
   justify-content: space-between;
   gap: 1rem;
@@ -247,13 +263,17 @@ onMounted(async () => {
 }
 
 .compare-copy {
-  max-width: 38ch;
+  max-width: 42ch;
   color: #6f5947;
 }
 
-.compare-sections {
+.compare-sections,
+.ranked-list {
   display: flex;
   flex-direction: column;
+}
+
+.compare-sections {
   gap: 1rem;
 }
 
@@ -270,27 +290,16 @@ onMounted(async () => {
   box-shadow: inset 0 0 0 2px rgba(142, 75, 22, 0.22);
 }
 
-.section-kicker,
-.card-label {
-  color: #8e4b16;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  font-size: 0.76rem;
-}
-
 .edit-link {
   color: #8e4b16;
   text-decoration: none;
 }
 
-.compare-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1rem;
+.ranked-list {
+  gap: 0.85rem;
 }
 
-.compare-card,
-.alternative-card {
+.ranked-card {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
@@ -299,14 +308,21 @@ onMounted(async () => {
   background: white;
 }
 
-.compare-card.main {
+.ranked-card.main {
   background: #fff6eb;
 }
 
-.alternatives {
+.variant-meta {
   display: flex;
-  flex-direction: column;
-  gap: 0.85rem;
+  align-items: baseline;
+  gap: 0.55rem;
+  font-weight: 600;
+}
+
+.rank-marker {
+  min-width: 1.5rem;
+  color: #8e4b16;
+  font-variant-numeric: tabular-nums;
 }
 
 pre {
@@ -319,8 +335,7 @@ pre {
 @media (max-width: 960px) {
   .compare-panel-header,
   .compare-section-header,
-  .compare-grid {
-    display: flex;
+  .card-header {
     flex-direction: column;
   }
 }
