@@ -12,6 +12,7 @@ import type {
 } from "../api/types";
 import DocumentViewNav from "../components/DocumentViewNav.vue";
 import SectionTree from "../components/SectionTree.vue";
+import { buildSectionNumbers } from "../section-numbering";
 import { useAuthStore } from "../stores/auth";
 
 type RankedSubmission = {
@@ -66,6 +67,7 @@ const compareSections = computed(() =>
     if (!view) {
       return {
         section,
+        number: sectionNumbers.value.get(section.id)?.full ?? "",
         ranked: [] as RankedSubmission[],
       };
     }
@@ -81,10 +83,13 @@ const compareSections = computed(() =>
 
     return {
       section,
+      number: sectionNumbers.value.get(section.id)?.full ?? "",
       ranked,
     };
   }),
 );
+
+const sectionNumbers = computed(() => buildSectionNumbers(orderedSections.value));
 
 function submissionLabel(submission: SubmissionRecord) {
   return `${submission.display_name} @${submission.username} • ${new Date(submission.published_at).toLocaleString()}`;
@@ -201,7 +206,10 @@ onMounted(async () => {
               :class="{ active: item.section.id === selectedSectionId }"
             >
               <header class="compare-section-header">
-                <h3>{{ item.section.title }}</h3>
+                <h3>
+                  <span class="section-number">{{ item.number }}</span>
+                  {{ item.section.title }}
+                </h3>
                 <RouterLink class="edit-link" :to="`/sections/${item.section.id}/edit`">
                   Edit this section
                 </RouterLink>
@@ -298,6 +306,12 @@ onMounted(async () => {
 .edit-link {
   color: #8e4b16;
   text-decoration: none;
+}
+
+.section-number {
+  margin-right: 0.55rem;
+  color: #8e4b16;
+  font-variant-numeric: tabular-nums;
 }
 
 .ranked-list {

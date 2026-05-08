@@ -2,17 +2,19 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
-import { getSectionView, publishSection, saveDraft, setPreferredBase } from "../api/documents";
-import type { SectionViewResponse } from "../api/types";
+import { getDocument, getSectionView, publishSection, saveDraft, setPreferredBase } from "../api/documents";
+import type { DocumentDetailResponse, SectionViewResponse } from "../api/types";
 import DocumentViewNav from "../components/DocumentViewNav.vue";
 import SectionEditor from "../components/SectionEditor.vue";
 import SubmissionList from "../components/SubmissionList.vue";
+import { buildSectionNumbers } from "../section-numbering";
 import { useAuthStore } from "../stores/auth";
 
 const route = useRoute();
 const router = useRouter();
 const auth = useAuthStore();
 
+const documentData = ref<DocumentDetailResponse | null>(null);
 const sectionView = ref<SectionViewResponse | null>(null);
 const draftContent = ref("");
 const isLoadingSection = ref(true);
@@ -24,6 +26,15 @@ const canManageOutline = computed(() =>
   auth.user ? ["privileged", "admin"].includes(auth.user.role) : false,
 );
 const selectedSection = computed(() => sectionView.value?.section ?? null);
+const sectionNumber = computed(() => {
+  const section = selectedSection.value;
+  const sections = documentData.value?.sections;
+  if (!section || !sections) {
+    return "";
+  }
+
+  return buildSectionNumbers(sections).get(section.id)?.full ?? "";
+});
 const globalMainSubmission = computed(
   () =>
     sectionView.value?.active_submissions.find(
@@ -77,7 +88,9 @@ async function loadSectionView() {
   isLoadingSection.value = true;
   error.value = null;
   try {
-    sectionView.value = await getSectionView(id);
+    const view = await getSectionView(id);
+    sectionView.value = view;
+    documentData.value = await getDocument(view.section.document_id);
     syncDraftFromView(sectionView.value);
   } catch (loadError) {
     error.value = loadError instanceof Error ? loadError.message : "Failed to load section";
@@ -166,7 +179,10 @@ onMounted(async () => {
       <section class="document-header">
         <div>
           <p class="eyebrow">Section Edit</p>
-          <h1>{{ selectedSection.title }}</h1>
+          <h1>
+            <span v-if="sectionNumber" class="section-number">{{ sectionNumber }}</span>
+            {{ selectedSection.title }}
+          </h1>
         </div>
         <div class="document-header-meta">
           <p class="document-slug">Section workspace</p>
@@ -226,5 +242,11 @@ onMounted(async () => {
 
 .error {
   color: #9d2a16;
+}
+
+.section-number {
+  margin-right: 0.55rem;
+  color: #8e4b16;
+  font-variant-numeric: tabular-nums;
 }
 </style>
