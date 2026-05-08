@@ -3,6 +3,7 @@ members = [
   "crates/rimbun-api",
   "crates/rimbun-core",
   "crates/rimbun-embedding-client",
+  "crates/rimbun-embedding-service",
   "crates/rimbun-jobs",
 ]
 resolver = "2"

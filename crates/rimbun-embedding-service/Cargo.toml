@@ -1,27 +1,16 @@
 [package]
-name = "rimbun-api"
+name = "rimbun-embedding-service"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-argon2.workspace = true
 axum.workspace = true
-axum-extra = { version = "0.10", features = ["cookie"] }
-chrono.workspace = true
-http.workspace = true
-rand_core.workspace = true
 serde.workspace = true
-serde_json.workspace = true
-sqlx.workspace = true
 tokio.workspace = true
-tower.workspace = true
 tower-http.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-uuid.workspace = true
 popsam-core = "0.1.0"
-
-rimbun-core = { path = "../rimbun-core" }
 rimbun-embedding-client = { path = "../rimbun-embedding-client" }

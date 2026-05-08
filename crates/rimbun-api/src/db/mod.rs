@@ -1,5 +1,6 @@
 pub mod documents;
 pub mod drafts;
+pub mod embeddings;
 pub mod moderation;
 pub mod preferences;
 pub mod projections;

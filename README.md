@@ -37,7 +37,7 @@ What is still intentionally incomplete:
 
 - no full production deployment stack in this repository
 - no live collaboration
-- no finished semantic embedding/clustering pipeline yet
+- real embeddings are now supported through a local embedding service, but the compare UI still does not expose richer cluster semantics yet
 - compare view is still section-based, not yet a fine-grained diff browser
 - markdown is currently shown as plain formatted text in reader/compare views, not yet as a full renderer
 
@@ -45,8 +45,9 @@ What is still intentionally incomplete:
 
 - `crates/rimbun-api`: Axum HTTP API
 - `crates/rimbun-core`: shared domain types and core logic
+- `crates/rimbun-embedding-service`: local embedding HTTP service backed by `popsam-core`
 - `crates/rimbun-jobs`: background-job-oriented crate for later async processing
-- `crates/rimbun-embedding-client`: client crate for a future local embedding service
+- `crates/rimbun-embedding-client`: client crate for the local embedding service
 - `web/`: Vue 3 + TypeScript frontend
 - `migrations/`: SQL migrations for Postgres
 
@@ -89,7 +90,19 @@ source .env
 set +a
 ```
 
-### 3. Run the backend
+### 3. Run the local embedding service
+
+```bash
+cargo run -p rimbun-embedding-service
+```
+
+Notes:
+
+- the service listens on `127.0.0.1:8001` by default
+- on first startup it may download the default multilingual sentence-transformer model
+- the API uses this service to compute and persist real embeddings for published submissions
+
+### 4. Run the backend
 
 ```bash
 cargo run -p rimbun-api
@@ -100,7 +113,7 @@ Notes:
 - the API listens on `127.0.0.1:3000` by default
 - database migrations run automatically on startup
 
-### 4. Run the frontend
+### 5. Run the frontend
 
 ```bash
 cd web
@@ -114,7 +127,7 @@ The Vite dev server proxies `/api` requests to the Rust backend. Open the URL sh
 http://127.0.0.1:5173
 ```
 
-### 5. First local workflow
+### 6. First local workflow
 
 After registering the first account, it will be a normal user by default. To test outline editing, promote it manually in Postgres:
 
@@ -138,6 +151,7 @@ There is not yet a finished production deployment recipe in this repository, but
 ### What you need
 
 - a Postgres database
+- the local embedding service
 - environment variables set explicitly
 - the Rust API running as a long-lived process
 - the Vue frontend built into static files
@@ -150,6 +164,7 @@ Set real production values, especially:
 - `DATABASE_URL`
 - `SESSION_SECRET`
 - `RIMBUN_PORT`
+- `RIMBUN_EMBEDDING_PORT`
 - `EMBEDDING_SERVICE_URL`
 
 Example:
@@ -158,10 +173,18 @@ Example:
 export DATABASE_URL='postgres://USER:PASSWORD@DBHOST:5432/rimbun'
 export SESSION_SECRET='replace-with-a-long-random-secret'
 export RIMBUN_PORT=3000
+export RIMBUN_EMBEDDING_PORT=8001
 export EMBEDDING_SERVICE_URL='http://127.0.0.1:8001'
 ```
 
-### 2. Build and run the backend
+### 2. Build and run the embedding service
+
+```bash
+cargo build --release -p rimbun-embedding-service
+./target/release/rimbun-embedding-service
+```
+
+### 3. Build and run the backend
 
 ```bash
 cargo build --release -p rimbun-api
@@ -173,7 +196,7 @@ Notes:
 - migrations still run automatically on startup
 - the API currently serves only the backend, not the frontend assets
 
-### 3. Build the frontend
+### 4. Build the frontend
 
 ```bash
 cd web
@@ -183,7 +206,7 @@ npm run build
 
 This creates static assets in `web/dist/`.
 
-### 4. Serve the frontend
+### 5. Serve the frontend
 
 Serve `web/dist/` from a static file server or reverse proxy, and route `/api` to the Rust backend.
 
@@ -191,12 +214,13 @@ A production setup therefore usually looks like this:
 
 - `https://your-domain/` -> static files from `web/dist`
 - `https://your-domain/api/...` -> `rimbun-api`
+- `http://127.0.0.1:8001/embed` -> local-only embedding service
 
 ### Current production caveats
 
 - no Docker production stack is included yet
 - no systemd unit files or reverse-proxy config are included yet
-- no background jobs or embedding service are required for the current MVP flow
+- the embedding service must be running if you want real semantic embeddings instead of the runtime fallback
 - no horizontal scaling or session-store tuning has been done yet
 
 ## Testing
@@ -227,7 +251,7 @@ The next major product steps are likely to be:
 
 - richer compare and diff presentation
 - proper markdown rendering
-- semantic embeddings and `popsam`-based clustering
+- richer cluster-aware compare presentation on top of the existing `popsam`-based ranking
 - improved moderation and ranking behavior
 - a fuller production deployment story
 

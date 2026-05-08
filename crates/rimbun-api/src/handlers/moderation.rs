@@ -50,7 +50,11 @@ pub async fn update(
     .await
     .map_err(|err| ApiError::internal(err.to_string()))?;
 
-    projections::rebuild_trivial_for_section(&state.pool, submission.section_id)
+    projections::rebuild_trivial_for_section(
+        &state.pool,
+        &state.embedding_client,
+        submission.section_id,
+    )
         .await
         .map_err(|err| ApiError::internal(err.to_string()))?;
 
