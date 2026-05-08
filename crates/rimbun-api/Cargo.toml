@@ -21,7 +21,7 @@ tower-http.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
-popsam-core = "0.1.0"
+popsam-core = "0.1.1"
 
 rimbun-core = { path = "../rimbun-core" }
 rimbun-embedding-client = { path = "../rimbun-embedding-client" }

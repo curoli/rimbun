@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use popsam_core::{
-    run_election, CandidateRoundVotes, ElectionConfig, EmbeddedTextInput, ElectionResult,
+    run_election, CandidateBestResult, ElectionConfig, EmbeddedTextInput, ElectionResult,
 };
 use rimbun_embedding_client::{types::EmbeddingRequest, EmbeddingClient};
 use serde::Serialize;
@@ -182,23 +182,14 @@ fn build_ranked_items(
         .iter()
         .map(|submission| (submission.id.to_string(), submission.id))
         .collect::<HashMap<_, _>>();
-    let representative_rank = result
-        .all_ranked_ids
-        .iter()
-        .enumerate()
-        .map(|(index, id)| (id.clone(), index))
-        .collect::<HashMap<_, _>>();
     let embeddings = result
         .embeddings
         .iter()
         .map(|embedding| (embedding.id.clone(), embedding.embedding.clone()))
         .collect::<HashMap<_, _>>();
     let anchors = cluster_anchor_ids(result);
-    let votes = latest_vote_rows(result);
-    let winner_embedding = embeddings
-        .get(&result.winner_id)
-        .cloned()
-        .unwrap_or_default();
+    let best_results = best_results_by_candidate(result);
+    let total_versions = result.embeddings.len() as f64;
 
     result
         .all_ranked_ids
@@ -215,24 +206,15 @@ fn build_ranked_items(
             };
 
             let cluster_id = assign_cluster_id(submission_id, &anchors, &embeddings);
-            let score = votes
+            let score = best_results
                 .get(submission_id)
-                .map(weighted_vote_score)
-                .or_else(|| {
-                    embeddings
-                        .get(submission_id)
-                        .map(|embedding| cosine_similarity(embedding, &winner_embedding) as f64)
-                });
+                .map(|result| best_round_support_percentage(result, total_versions));
 
             Some(RankedProjectionItem {
                 submission_id: parsed_submission_id,
                 role,
                 rank: index as i32,
-                cluster_id: cluster_id.or_else(|| {
-                    representative_rank
-                        .contains_key(submission_id)
-                        .then(|| submission_id.clone())
-                }),
+                cluster_id: cluster_id.or_else(|| Some(submission_id.clone())),
                 score,
             })
         })
@@ -255,21 +237,6 @@ fn cluster_anchor_ids(result: &ElectionResult) -> Vec<String> {
         .collect()
 }
 
-fn latest_vote_rows(result: &ElectionResult) -> HashMap<String, CandidateRoundVotes> {
-    result
-        .rounds
-        .last()
-        .map(|round| {
-            round
-                .votes
-                .iter()
-                .cloned()
-                .map(|vote| (vote.id.clone(), vote))
-                .collect::<HashMap<_, _>>()
-        })
-        .unwrap_or_default()
-}
-
 fn assign_cluster_id(
     submission_id: &str,
     anchors: &[String],
@@ -286,10 +253,25 @@ fn assign_cluster_id(
         .map(|(anchor_id, _)| anchor_id)
 }
 
-fn weighted_vote_score(votes: &CandidateRoundVotes) -> f64 {
-    f64::from(votes.first_votes) * 1.0
-        + f64::from(votes.second_votes) * 0.5
-        + f64::from(votes.third_votes) * 0.25
+fn cosine_similarity(left: &[f32], right: &[f32]) -> f32 {
+    left.iter().zip(right.iter()).map(|(a, b)| a * b).sum()
+}
+
+fn best_results_by_candidate(result: &ElectionResult) -> HashMap<String, CandidateBestResult> {
+    result
+        .candidate_best_results
+        .iter()
+        .cloned()
+        .map(|result| (result.id.clone(), result))
+        .collect()
+}
+
+fn best_round_support_percentage(result: &CandidateBestResult, total_versions: f64) -> f64 {
+    if total_versions <= 0.0 {
+        return 0.0;
+    }
+
+    f64::from(result.first_votes) / total_versions * 100.0
 }
 
 fn lexical_embedding(markdown_content: &str) -> Vec<f32> {
@@ -341,10 +323,6 @@ fn stable_hash(bytes: &[u8]) -> u64 {
         hash = hash.wrapping_mul(0x100000001b3);
     }
     hash
-}
-
-fn cosine_similarity(left: &[f32], right: &[f32]) -> f32 {
-    left.iter().zip(right.iter()).map(|(a, b)| a * b).sum()
 }
 
 #[cfg(test)]
@@ -420,5 +398,21 @@ mod tests {
         assert_eq!(ranked[2].role, "principal_alternative");
         assert!(ranked.iter().all(|item| item.cluster_id.is_some()));
         assert!(ranked.iter().all(|item| item.score.is_some()));
+    }
+
+    #[test]
+    fn best_round_support_uses_first_votes_over_total_versions() {
+        let result = CandidateBestResult {
+            id: "candidate-a".to_owned(),
+            full_round_index: 2,
+            active_candidates: 2,
+            rank: 1,
+            first_votes: 3,
+            second_votes: 0,
+            third_votes: 0,
+        };
+
+        assert_eq!(best_round_support_percentage(&result, 3.0), 100.0);
+        assert_eq!(best_round_support_percentage(&result, 6.0), 50.0);
     }
 }

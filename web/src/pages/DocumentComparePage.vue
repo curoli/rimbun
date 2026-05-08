@@ -90,6 +90,10 @@ function submissionLabel(submission: SubmissionRecord) {
   return `${submission.display_name} @${submission.username} • ${new Date(submission.published_at).toLocaleString()}`;
 }
 
+function supportLabel(score: number | null) {
+  return score === null ? "n/a" : `${score.toFixed(0)}%`;
+}
+
 async function loadDocument() {
   const id = route.params.id;
   if (typeof id !== "string") {
@@ -183,7 +187,7 @@ onMounted(async () => {
               <h2>Ranked versions</h2>
             </div>
             <p class="compare-copy">
-              Versions are ordered by the current `popsam` result.
+              Versions are ordered by the current `popsam` result. Support is shown from the candidate's best round result.
             </p>
           </div>
 
@@ -215,6 +219,7 @@ onMounted(async () => {
                       <span class="rank-marker">{{ entry.projection.rank + 1 }}</span>
                       <span>{{ submissionLabel(entry.submission) }}</span>
                     </strong>
+                    <span class="support-pill">{{ supportLabel(entry.projection.score) }}</span>
                   </div>
                   <pre>{{ entry.submission.markdown_content }}</pre>
                 </article>
@@ -323,6 +328,17 @@ onMounted(async () => {
   min-width: 1.5rem;
   color: #8e4b16;
   font-variant-numeric: tabular-nums;
+}
+
+.support-pill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.38rem 0.7rem;
+  background: rgba(142, 75, 22, 0.1);
+  color: #8e4b16;
+  font-size: 0.78rem;
+  white-space: nowrap;
 }
 
 pre {

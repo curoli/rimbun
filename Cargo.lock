@@ -1991,9 +1991,9 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
 name = "popsam-core"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2365117d9e109f19d0a8bd219223ad5d3179d6b083378f82ebf1b0ac275485e0"
+checksum = "1e04bf043bdae7b16d6de4d1611abfa5cdef6e97eaabb91f946cb0fd3e51ce6f"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -3771,7 +3771,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
