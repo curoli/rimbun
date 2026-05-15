@@ -61,7 +61,7 @@ const sectionNumbers = computed(() => buildSectionNumbers(props.sections));
       :style="{ paddingLeft: `${1 + depthFor(section.path) * 1.1}rem` }"
       @click="emit('select', section.id)"
     >
-      <span class="tree-number">{{ sectionNumbers.get(section.id)?.short }}</span>
+      <span class="tree-number">{{ sectionNumbers.get(section.id)?.full }}</span>
       <span class="tree-title">{{ section.title }}</span>
     </button>
   </aside>
