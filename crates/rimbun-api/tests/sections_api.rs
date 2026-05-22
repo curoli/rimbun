@@ -917,3 +917,116 @@ async fn moderation_excluded_from_clustering_keeps_visibility_but_removes_projec
         .expect("projection submission id");
     assert_ne!(projected_submission_id, submission_b_id.to_string());
 }
+
+#[tokio::test]
+async fn section_compare_requires_auth_for_authenticated_documents() {
+    let Some(pool) = test_pool().await else {
+        eprintln!("Skipping integration test: TEST_DATABASE_URL not set or unreachable");
+        return;
+    };
+    reset_schema(&pool).await;
+
+    let (owner_id, _owner_session) = seed_privileged_user(&pool).await;
+    let (_document_id, section_id) = seed_single_section_document(&pool, owner_id).await;
+
+    let app = app::build(test_config(
+        std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL"),
+    ))
+    .await
+    .expect("build app");
+
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri(format!("/api/sections/{section_id}/compare"))
+        .body(Body::empty())
+        .expect("request");
+
+    let response = app.oneshot(request).await.expect("response");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn section_compare_returns_ranked_block_variants() {
+    let Some(pool) = test_pool().await else {
+        eprintln!("Skipping integration test: TEST_DATABASE_URL not set or unreachable");
+        return;
+    };
+    reset_schema(&pool).await;
+
+    let (user_a_id, session_a) = seed_user_with_role(&pool, "normal").await;
+    let (_user_b_id, session_b) = seed_user_with_role(&pool, "normal").await;
+    let (_document_id, section_id) = seed_single_section_document(&pool, user_a_id).await;
+
+    let app = app::build(test_config(
+        std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL"),
+    ))
+    .await
+    .expect("build app");
+
+    for (cookie, body) in [
+        (
+            format!("rimbun_session={session_a}"),
+            json!({
+                "base_submission_id": null,
+                "markdown_content": "# Heading\n\nShared opening paragraph.\n\nA-specific ending."
+            }),
+        ),
+        (
+            format!("rimbun_session={session_b}"),
+            json!({
+                "base_submission_id": null,
+                "markdown_content": "# Heading\n\nShared opening paragraph.\n\nB-specific ending."
+            }),
+        ),
+    ] {
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri(format!("/api/sections/{section_id}/publish"))
+            .header(header::COOKIE, cookie)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("publish request");
+
+        let response = app.clone().oneshot(request).await.expect("publish response");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    let compare_request = Request::builder()
+        .method(Method::GET)
+        .uri(format!("/api/sections/{section_id}/compare"))
+        .header(header::COOKIE, format!("rimbun_session={session_a}"))
+        .body(Body::empty())
+        .expect("compare request");
+
+    let compare_response = app
+        .oneshot(compare_request)
+        .await
+        .expect("compare response");
+    assert_eq!(compare_response.status(), StatusCode::OK);
+
+    let compare_body = to_bytes(compare_response.into_body(), usize::MAX)
+        .await
+        .expect("compare body");
+    let compare_json: serde_json::Value =
+        serde_json::from_slice(&compare_body).expect("compare json");
+
+    assert_eq!(compare_json["section_id"], section_id.to_string());
+    assert_eq!(compare_json["section_number"], "1");
+    assert!(compare_json["main_submission"]["submission_id"].is_string());
+    assert_eq!(
+        compare_json["alternatives"].as_array().expect("alternatives array").len(),
+        1
+    );
+
+    let blocks = compare_json["blocks"].as_array().expect("blocks array");
+    assert!(!blocks.is_empty());
+    assert!(blocks.iter().any(|block| block["anchor"]["block_path"].is_array()));
+    assert!(blocks.iter().any(|block| block["variants"].is_array()));
+    assert!(blocks.iter().any(|block| {
+        block["variants"]
+            .as_array()
+            .expect("variants array")
+            .iter()
+            .any(|variant| variant["kind"] == "changed" || variant["kind"] == "unchanged")
+    }));
+}

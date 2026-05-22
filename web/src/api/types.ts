@@ -80,3 +80,55 @@ export type PublishResponse = {
   submission: SubmissionRecord;
   queued_jobs: string[];
 };
+
+export type SubmissionSummaryDto = {
+  submission_id: string;
+  user_id: string;
+  username: string;
+  display_name: string;
+  published_at: string;
+  rank: number;
+  support_percent: number | null;
+};
+
+export type BlockAnchorDto = {
+  block_path: number[];
+  heading_path: number[];
+  stable_block_path: string[];
+  stable_heading_path: string[];
+  block_key: string;
+  list_item_index: number | null;
+};
+
+export type SourceSpanDto = {
+  start_line: number;
+  start_column: number;
+  end_line: number;
+  end_column: number;
+};
+
+export type BlockVariantDto = {
+  alternative_submission_id: string;
+  alternative_index: number;
+  kind: "unchanged" | "changed";
+  weight: string | null;
+  text: string;
+  source_span: SourceSpanDto | null;
+};
+
+export type CompareBlockDto = {
+  block_index: number;
+  block_kind: string;
+  anchor: BlockAnchorDto;
+  main_text: string;
+  variants: BlockVariantDto[];
+};
+
+export type SectionCompareDto = {
+  section_id: string;
+  section_title: string;
+  section_number: string;
+  main_submission: SubmissionSummaryDto;
+  alternatives: SubmissionSummaryDto[];
+  blocks: CompareBlockDto[];
+};

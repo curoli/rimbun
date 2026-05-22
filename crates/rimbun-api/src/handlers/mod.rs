@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod compare;
 pub mod documents;
 pub mod drafts;
 pub mod moderation;

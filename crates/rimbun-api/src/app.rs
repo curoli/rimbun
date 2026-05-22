@@ -51,6 +51,10 @@ pub async fn build(config: Config) -> anyhow::Result<Router> {
             get(crate::handlers::submissions::list),
         )
         .route(
+            "/api/sections/{id}/compare",
+            get(crate::handlers::compare::section_compare),
+        )
+        .route(
             "/api/sections/{id}/preferences/base-submission",
             put(crate::handlers::preferences::set_base),
         )

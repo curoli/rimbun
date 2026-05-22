@@ -2,22 +2,24 @@
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
-import { getDocument, getSectionView } from "../api/documents";
+import { getDocument, getSectionCompare } from "../api/documents";
 import type {
+  CompareBlockDto,
   DocumentDetailResponse,
-  ProjectionItemRecord,
+  SectionCompareDto,
   SectionRecord,
-  SectionViewResponse,
-  SubmissionRecord,
+  SubmissionSummaryDto,
 } from "../api/types";
 import DocumentViewNav from "../components/DocumentViewNav.vue";
 import SectionTree from "../components/SectionTree.vue";
 import { buildSectionNumbers } from "../section-numbering";
 import { useAuthStore } from "../stores/auth";
 
-type RankedSubmission = {
-  submission: SubmissionRecord;
-  projection: ProjectionItemRecord;
+type SectionCompareItem = {
+  section: SectionRecord;
+  number: string;
+  compare: SectionCompareDto | null;
+  submissions: SubmissionSummaryDto[];
 };
 
 const route = useRoute();
@@ -25,10 +27,10 @@ const router = useRouter();
 const auth = useAuthStore();
 
 const documentData = ref<DocumentDetailResponse | null>(null);
-const sectionViews = ref<Record<string, SectionViewResponse>>({});
+const sectionCompares = ref<Record<string, SectionCompareDto>>({});
 const selectedSectionId = ref<string | null>(null);
 const isLoadingDocument = ref(true);
-const isLoadingViews = ref(false);
+const isLoadingCompares = ref(false);
 const error = ref<string | null>(null);
 
 const canManageOutline = computed(() =>
@@ -61,42 +63,38 @@ const orderedSections = computed(() => {
   return result;
 });
 
-const compareSections = computed(() =>
+const sectionNumbers = computed(() => buildSectionNumbers(orderedSections.value));
+
+const compareSections = computed<SectionCompareItem[]>(() =>
   orderedSections.value.map((section) => {
-    const view = sectionViews.value[section.id];
-    if (!view) {
-      return {
-        section,
-        number: sectionNumbers.value.get(section.id)?.full ?? "",
-        ranked: [] as RankedSubmission[],
-      };
-    }
-
-    const submissionById = new Map(view.active_submissions.map((submission) => [submission.id, submission]));
-    const ranked = view.projection
-      .map((projection) => {
-        const submission = submissionById.get(projection.submission_id);
-        return submission ? { submission, projection } : null;
-      })
-      .filter((entry): entry is RankedSubmission => entry !== null)
-      .sort((left, right) => left.projection.rank - right.projection.rank);
-
+    const compare = sectionCompares.value[section.id] ?? null;
     return {
       section,
-      number: sectionNumbers.value.get(section.id)?.full ?? "",
-      ranked,
+      number: compare?.section_number ?? sectionNumbers.value.get(section.id)?.full ?? "",
+      compare,
+      submissions: compare ? [compare.main_submission, ...compare.alternatives] : [],
     };
   }),
 );
 
-const sectionNumbers = computed(() => buildSectionNumbers(orderedSections.value));
-
-function submissionLabel(submission: SubmissionRecord) {
+function submissionLabel(submission: SubmissionSummaryDto) {
   return `${submission.display_name} @${submission.username} • ${new Date(submission.published_at).toLocaleString()}`;
 }
 
 function supportLabel(score: number | null) {
   return score === null ? "n/a" : `${score.toFixed(0)}%`;
+}
+
+function changedVariants(block: CompareBlockDto) {
+  return block.variants.filter((variant) => variant.kind === "changed");
+}
+
+function submissionById(item: SectionCompareItem, submissionId: string) {
+  return item.submissions.find((submission) => submission.submission_id === submissionId) ?? null;
+}
+
+function blockLabel(block: CompareBlockDto) {
+  return block.block_kind.replaceAll("_", " ");
 }
 
 async function loadDocument() {
@@ -114,7 +112,7 @@ async function loadDocument() {
       selectedSectionId.value && data.sections.some((section) => section.id === selectedSectionId.value)
         ? selectedSectionId.value
         : data.sections[0]?.id ?? null;
-    await loadSectionViews(data.sections.map((section) => section.id));
+    await loadSectionCompares(data.sections.map((section) => section.id));
   } catch (loadError) {
     error.value = loadError instanceof Error ? loadError.message : "Failed to load document";
     if (error.value.toLowerCase().includes("authentication required")) {
@@ -125,15 +123,15 @@ async function loadDocument() {
   }
 }
 
-async function loadSectionViews(sectionIds: string[]) {
-  isLoadingViews.value = true;
+async function loadSectionCompares(sectionIds: string[]) {
+  isLoadingCompares.value = true;
   try {
     const entries = await Promise.all(
-      sectionIds.map(async (sectionId) => [sectionId, await getSectionView(sectionId)] as const),
+      sectionIds.map(async (sectionId) => [sectionId, await getSectionCompare(sectionId)] as const),
     );
-    sectionViews.value = Object.fromEntries(entries);
+    sectionCompares.value = Object.fromEntries(entries);
   } finally {
-    isLoadingViews.value = false;
+    isLoadingCompares.value = false;
   }
 }
 
@@ -189,14 +187,14 @@ onMounted(async () => {
           <div class="compare-panel-header">
             <div>
               <p class="eyebrow">Compare</p>
-              <h2>Ranked versions</h2>
+              <h2>Variant blocks</h2>
             </div>
             <p class="compare-copy">
-              Versions are ordered by the current `popsam` result. Support is shown from the candidate's best round result.
+              The server parses markdown and sends aligned block variants against the current main version.
             </p>
           </div>
 
-          <p v-if="isLoadingViews">Loading comparisons...</p>
+          <p v-if="isLoadingCompares">Loading comparisons...</p>
           <div v-else class="compare-sections">
             <article
               v-for="item in compareSections"
@@ -206,30 +204,79 @@ onMounted(async () => {
               :class="{ active: item.section.id === selectedSectionId }"
             >
               <header class="compare-section-header">
-                <h3>
-                  <span class="section-number">{{ item.number }}</span>
-                  {{ item.section.title }}
-                </h3>
+                <div class="section-heading">
+                  <h3>
+                    <span class="section-number">{{ item.number }}</span>
+                    {{ item.section.title }}
+                  </h3>
+                  <p v-if="item.compare" class="main-meta">
+                    Main: {{ submissionLabel(item.compare.main_submission) }}
+                  </p>
+                </div>
                 <RouterLink class="edit-link" :to="`/sections/${item.section.id}/edit`">
                   Edit this section
                 </RouterLink>
               </header>
 
-              <div v-if="item.ranked.length" class="ranked-list">
-                <article
-                  v-for="entry in item.ranked"
-                  :key="entry.submission.id"
-                  class="ranked-card"
-                  :class="{ main: entry.projection.role === 'main' }"
+              <div v-if="item.submissions.length" class="rank-strip">
+                <span
+                  v-for="submission in item.submissions"
+                  :key="submission.submission_id"
+                  class="rank-pill"
+                  :class="{ main: submission.submission_id === item.compare?.main_submission.submission_id }"
                 >
-                  <div class="card-header">
-                    <strong class="variant-meta">
-                      <span class="rank-marker">{{ entry.projection.rank + 1 }}</span>
-                      <span>{{ submissionLabel(entry.submission) }}</span>
-                    </strong>
-                    <span class="support-pill">{{ supportLabel(entry.projection.score) }}</span>
+                  <span class="rank-marker">{{ submission.rank }}</span>
+                  <span>{{ submission.display_name }} @{{ submission.username }}</span>
+                  <span v-if="submission.support_percent !== null" class="support-pill">
+                    {{ supportLabel(submission.support_percent) }}
+                  </span>
+                </span>
+              </div>
+
+              <div v-if="item.compare?.blocks.length" class="block-list">
+                <article
+                  v-for="block in item.compare.blocks"
+                  :key="`${item.section.id}-${block.anchor.block_key}-${block.block_index}`"
+                  class="block-card"
+                >
+                  <header class="block-header">
+                    <span class="block-kind">{{ blockLabel(block) }}</span>
+                  </header>
+                  <pre class="block-text main-text">{{ block.main_text }}</pre>
+
+                  <div v-if="changedVariants(block).length" class="variant-list">
+                    <article
+                      v-for="variant in changedVariants(block)"
+                      :key="`${block.anchor.block_key}-${variant.alternative_submission_id}-${variant.alternative_index}`"
+                      class="variant-card"
+                    >
+                      <header class="variant-header">
+                        <strong class="variant-meta">
+                          <span class="rank-marker">
+                            {{
+                              submissionById(item, variant.alternative_submission_id)?.rank !== undefined
+                                ? submissionById(item, variant.alternative_submission_id)!.rank
+                                : "?"
+                            }}
+                          </span>
+                          <span>
+                            {{
+                              submissionById(item, variant.alternative_submission_id)
+                                ? submissionLabel(submissionById(item, variant.alternative_submission_id)!)
+                                : "Unknown alternative"
+                            }}
+                          </span>
+                        </strong>
+                        <span
+                          v-if="submissionById(item, variant.alternative_submission_id)?.support_percent !== null"
+                          class="support-pill"
+                        >
+                          {{ supportLabel(submissionById(item, variant.alternative_submission_id)!.support_percent) }}
+                        </span>
+                      </header>
+                      <pre class="block-text">{{ variant.text }}</pre>
+                    </article>
                   </div>
-                  <pre>{{ entry.submission.markdown_content }}</pre>
                 </article>
               </div>
               <p v-else class="empty-note">No published version yet.</p>
@@ -246,7 +293,8 @@ onMounted(async () => {
 
 .compare-panel,
 .compare-section,
-.ranked-card {
+.block-card,
+.variant-card {
   border: 1px solid rgba(35, 24, 15, 0.08);
 }
 
@@ -261,7 +309,7 @@ onMounted(async () => {
 
 .compare-panel-header,
 .compare-section-header,
-.card-header {
+.variant-header {
   display: flex;
   justify-content: space-between;
   gap: 1rem;
@@ -271,17 +319,19 @@ onMounted(async () => {
 .compare-panel-header h2,
 .compare-copy,
 .compare-section-header h3,
+.main-meta,
 .empty-note {
   margin: 0;
 }
 
-.compare-copy {
-  max-width: 42ch;
+.compare-copy,
+.main-meta {
   color: #6f5947;
 }
 
 .compare-sections,
-.ranked-list {
+.block-list,
+.variant-list {
   display: flex;
   flex-direction: column;
 }
@@ -303,6 +353,12 @@ onMounted(async () => {
   box-shadow: inset 0 0 0 2px rgba(142, 75, 22, 0.22);
 }
 
+.section-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
 .edit-link {
   color: #8e4b16;
   text-decoration: none;
@@ -314,11 +370,50 @@ onMounted(async () => {
   font-variant-numeric: tabular-nums;
 }
 
-.ranked-list {
-  gap: 0.85rem;
+.rank-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
 }
 
-.ranked-card {
+.rank-pill,
+.support-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.rank-pill {
+  padding: 0.45rem 0.75rem;
+  background: rgba(142, 75, 22, 0.08);
+  color: #58351a;
+}
+
+.rank-pill.main {
+  background: rgba(142, 75, 22, 0.18);
+}
+
+.support-pill {
+  padding: 0.32rem 0.62rem;
+  background: rgba(142, 75, 22, 0.1);
+  color: #8e4b16;
+}
+
+.rank-marker {
+  min-width: 1.35rem;
+  color: #8e4b16;
+  font-variant-numeric: tabular-nums;
+}
+
+.block-list {
+  gap: 0.9rem;
+}
+
+.block-card,
+.variant-card {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
@@ -327,8 +422,25 @@ onMounted(async () => {
   background: white;
 }
 
-.ranked-card.main {
-  background: #fff6eb;
+.block-header {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.block-kind {
+  text-transform: capitalize;
+  color: #8e4b16;
+  font-size: 0.8rem;
+  letter-spacing: 0.04em;
+}
+
+.variant-list {
+  gap: 0.75rem;
+  padding-top: 0.25rem;
+}
+
+.variant-card {
+  background: #fff8ef;
 }
 
 .variant-meta {
@@ -338,34 +450,21 @@ onMounted(async () => {
   font-weight: 600;
 }
 
-.rank-marker {
-  min-width: 1.5rem;
-  color: #8e4b16;
-  font-variant-numeric: tabular-nums;
-}
-
-.support-pill {
-  display: inline-flex;
-  align-items: center;
-  border-radius: 999px;
-  padding: 0.38rem 0.7rem;
-  background: rgba(142, 75, 22, 0.1);
-  color: #8e4b16;
-  font-size: 0.78rem;
-  white-space: nowrap;
-}
-
-pre {
+.block-text {
   margin: 0;
   white-space: pre-wrap;
   font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
   line-height: 1.55;
 }
 
+.main-text {
+  color: #22150d;
+}
+
 @media (max-width: 960px) {
   .compare-panel-header,
   .compare-section-header,
-  .card-header {
+  .variant-header {
     flex-direction: column;
   }
 }

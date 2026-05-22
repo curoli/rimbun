@@ -5,6 +5,7 @@ import type {
   DraftRecord,
   PublishResponse,
   SectionRecord,
+  SectionCompareDto,
   SectionViewResponse,
 } from "./types";
 
@@ -58,6 +59,10 @@ export function updateSection(
 
 export function getSectionView(sectionId: string) {
   return apiRequest<SectionViewResponse>(`/api/sections/${sectionId}/view`);
+}
+
+export function getSectionCompare(sectionId: string) {
+  return apiRequest<SectionCompareDto>(`/api/sections/${sectionId}/compare`);
 }
 
 export function saveDraft(sectionId: string, payload: { base_submission_id: string | null; markdown_content: string }) {
