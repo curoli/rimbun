@@ -2415,6 +2415,7 @@ dependencies = [
  "axum",
  "axum-extra",
  "chrono",
+ "dotenvy",
  "http",
  "markalign",
  "popsam-core",
@@ -2461,6 +2462,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "dotenvy",
  "popsam-core",
  "rimbun-embedding-client",
  "serde",

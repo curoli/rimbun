@@ -38,6 +38,8 @@ struct HealthResponse {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let _ = dotenvy::dotenv();
+
     tracing_subscriber::fmt::init();
 
     let config = Config::from_env()?;

@@ -10,6 +10,7 @@ argon2.workspace = true
 axum.workspace = true
 axum-extra = { version = "0.10", features = ["cookie"] }
 chrono.workspace = true
+dotenvy.workspace = true
 http.workspace = true
 rand_core.workspace = true
 serde.workspace = true

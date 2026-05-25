@@ -12,6 +12,7 @@ import type {
 } from "../api/types";
 import DocumentViewNav from "../components/DocumentViewNav.vue";
 import SectionTree from "../components/SectionTree.vue";
+import { buildInlineDiff, type DiffSegment } from "../inline-diff";
 import { buildSectionNumbers } from "../section-numbering";
 import { useAuthStore } from "../stores/auth";
 
@@ -95,6 +96,18 @@ function submissionById(item: SectionCompareItem, submissionId: string) {
 
 function blockLabel(block: CompareBlockDto) {
   return block.block_kind.replaceAll("_", " ");
+}
+
+function inlineDiff(block: CompareBlockDto, alternativeText: string) {
+  return buildInlineDiff(block.main_text, alternativeText);
+}
+
+function segmentClass(kind: DiffSegment["kind"]) {
+  return {
+    unchanged: kind === "unchanged",
+    removed: kind === "removed",
+    added: kind === "added",
+  };
 }
 
 async function loadDocument() {
@@ -187,10 +200,10 @@ onMounted(async () => {
           <div class="compare-panel-header">
             <div>
               <p class="eyebrow">Compare</p>
-              <h2>Variant blocks</h2>
+              <h2>Aligned variants</h2>
             </div>
             <p class="compare-copy">
-              The server parses markdown and sends aligned block variants against the current main version.
+              Shared wording stays plain. Differences are marked directly inside the main text and each alternative.
             </p>
           </div>
 
@@ -239,11 +252,6 @@ onMounted(async () => {
                   :key="`${item.section.id}-${block.anchor.block_key}-${block.block_index}`"
                   class="block-card"
                 >
-                  <header class="block-header">
-                    <span class="block-kind">{{ blockLabel(block) }}</span>
-                  </header>
-                  <pre class="block-text main-text">{{ block.main_text }}</pre>
-
                   <div v-if="changedVariants(block).length" class="variant-list">
                     <article
                       v-for="variant in changedVariants(block)"
@@ -274,8 +282,43 @@ onMounted(async () => {
                           {{ supportLabel(submissionById(item, variant.alternative_submission_id)!.support_percent) }}
                         </span>
                       </header>
-                      <pre class="block-text">{{ variant.text }}</pre>
+
+                      <div class="comparison-columns">
+                        <section class="diff-pane main-pane">
+                          <header class="diff-pane-header">
+                            <span class="block-kind">{{ blockLabel(block) }}</span>
+                            <span class="diff-label">Main</span>
+                          </header>
+                          <p class="diff-text">
+                            <template
+                              v-for="(segment, index) in inlineDiff(block, variant.text).reference"
+                              :key="`main-${block.block_index}-${variant.alternative_submission_id}-${index}`"
+                            >
+                              <span class="diff-segment" :class="segmentClass(segment.kind)">{{ segment.text }}</span>
+                            </template>
+                          </p>
+                        </section>
+
+                        <section class="diff-pane alt-pane">
+                          <header class="diff-pane-header">
+                            <span class="block-kind">{{ blockLabel(block) }}</span>
+                            <span class="diff-label">Alternative</span>
+                          </header>
+                          <p class="diff-text">
+                            <template
+                              v-for="(segment, index) in inlineDiff(block, variant.text).alternative"
+                              :key="`alt-${block.block_index}-${variant.alternative_submission_id}-${index}`"
+                            >
+                              <span class="diff-segment" :class="segmentClass(segment.kind)">{{ segment.text }}</span>
+                            </template>
+                          </p>
+                        </section>
+                      </div>
                     </article>
+                  </div>
+                  <div v-else class="all-equal-note">
+                    <span class="block-kind">{{ blockLabel(block) }}</span>
+                    <span>All visible alternatives match this block.</span>
                   </div>
                 </article>
               </div>
@@ -294,7 +337,8 @@ onMounted(async () => {
 .compare-panel,
 .compare-section,
 .block-card,
-.variant-card {
+.variant-card,
+.diff-pane {
   border: 1px solid rgba(35, 24, 15, 0.08);
 }
 
@@ -413,18 +457,14 @@ onMounted(async () => {
 }
 
 .block-card,
-.variant-card {
+.variant-card,
+.diff-pane {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
   padding: 0.95rem;
   border-radius: 1rem;
   background: white;
-}
-
-.block-header {
-  display: flex;
-  justify-content: flex-end;
 }
 
 .block-kind {
@@ -436,11 +476,48 @@ onMounted(async () => {
 
 .variant-list {
   gap: 0.75rem;
-  padding-top: 0.25rem;
 }
 
 .variant-card {
   background: #fff8ef;
+}
+
+.comparison-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.diff-pane {
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.main-pane {
+  background: #fffdf9;
+}
+
+.alt-pane {
+  background: #fff9f1;
+}
+
+.diff-pane-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: baseline;
+}
+
+.diff-label,
+.all-equal-note {
+  color: #6f5947;
+  font-size: 0.84rem;
+}
+
+.all-equal-note {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: baseline;
 }
 
 .variant-meta {
@@ -450,14 +527,29 @@ onMounted(async () => {
   font-weight: 600;
 }
 
-.block-text {
+.diff-text {
   margin: 0;
   white-space: pre-wrap;
-  font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
   line-height: 1.55;
+  font-size: 0.98rem;
 }
 
-.main-text {
+.diff-segment {
+  white-space: pre-wrap;
+}
+
+.diff-segment.removed {
+  background: rgba(192, 74, 53, 0.14);
+  color: #8e2f23;
+  text-decoration: line-through;
+}
+
+.diff-segment.added {
+  background: rgba(82, 131, 61, 0.16);
+  color: #335f28;
+}
+
+.diff-segment.unchanged {
   color: #22150d;
 }
 
@@ -466,6 +558,10 @@ onMounted(async () => {
   .compare-section-header,
   .variant-header {
     flex-direction: column;
+  }
+
+  .comparison-columns {
+    grid-template-columns: 1fr;
   }
 }
 </style>

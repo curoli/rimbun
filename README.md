@@ -82,13 +82,7 @@ SESSION_SECRET=change-me
 EMBEDDING_SERVICE_URL=http://127.0.0.1:8001
 ```
 
-The backend currently reads environment variables from the process environment, so load the file before starting the API:
-
-```bash
-set -a
-source .env
-set +a
-```
+Both local Rust services load `.env` automatically on startup.
 
 ### 3. Run the local embedding service
 
