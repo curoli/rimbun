@@ -12,7 +12,7 @@ import type {
 } from "../api/types";
 import DocumentViewNav from "../components/DocumentViewNav.vue";
 import SectionTree from "../components/SectionTree.vue";
-import { buildInlineDiff, type DiffSegment } from "../inline-diff";
+import { buildInlineDiff } from "../inline-diff";
 import { buildSectionNumbers } from "../section-numbering";
 import { useAuthStore } from "../stores/auth";
 
@@ -23,6 +23,16 @@ type SectionCompareItem = {
   submissions: SubmissionSummaryDto[];
 };
 
+type VariantHighlight = {
+  id: string;
+  sourceText: string;
+  variants: Array<{
+    variant: ReturnType<typeof changedVariants>[number];
+    submission: SubmissionSummaryDto | null;
+    text: string;
+  }>;
+};
+
 const route = useRoute();
 const router = useRouter();
 const auth = useAuthStore();
@@ -30,6 +40,8 @@ const auth = useAuthStore();
 const documentData = ref<DocumentDetailResponse | null>(null);
 const sectionCompares = ref<Record<string, SectionCompareDto>>({});
 const selectedSectionId = ref<string | null>(null);
+const openVariantKey = ref<string | null>(null);
+const dismissedVariantKey = ref<string | null>(null);
 const isLoadingDocument = ref(true);
 const isLoadingCompares = ref(false);
 const error = ref<string | null>(null);
@@ -102,12 +114,122 @@ function inlineDiff(block: CompareBlockDto, alternativeText: string) {
   return buildInlineDiff(block.main_text, alternativeText);
 }
 
-function segmentClass(kind: DiffSegment["kind"]) {
-  return {
-    unchanged: kind === "unchanged",
-    removed: kind === "removed",
-    added: kind === "added",
-  };
+function markerKey(sectionId: string, highlightId: string) {
+  return `${sectionId}:${highlightId}`;
+}
+
+function openVariantPanel(sectionId: string, highlightId: string) {
+  const key = markerKey(sectionId, highlightId);
+  dismissedVariantKey.value = null;
+  openVariantKey.value = key;
+}
+
+function closeVariantPanel() {
+  dismissedVariantKey.value = openVariantKey.value;
+  openVariantKey.value = null;
+}
+
+function handleCloseVariantPanel(event: MouseEvent) {
+  event.stopPropagation();
+  closeVariantPanel();
+}
+
+function handleVariantMarkerClick(sectionId: string, highlightId: string, event: MouseEvent) {
+  event.stopPropagation();
+  if (isVariantPanelOpen(sectionId, highlightId)) {
+    closeVariantPanel();
+  } else {
+    openVariantPanel(sectionId, highlightId);
+  }
+}
+
+function isVariantPanelOpen(sectionId: string, highlightId: string) {
+  return openVariantKey.value === markerKey(sectionId, highlightId);
+}
+
+function isVariantPanelDismissed(sectionId: string, highlightId: string) {
+  return dismissedVariantKey.value === markerKey(sectionId, highlightId);
+}
+
+function clearDismissedVariantPanel(sectionId: string, highlightId: string) {
+  if (isVariantPanelDismissed(sectionId, highlightId)) {
+    dismissedVariantKey.value = null;
+  }
+}
+
+function changedText(segments: ReturnType<typeof buildInlineDiff>["reference"], kind: "removed" | "added") {
+  return segments
+    .filter((segment) => segment.kind === kind)
+    .map((segment) => segment.text)
+    .join("")
+    .trim();
+}
+
+function blockHighlights(item: SectionCompareItem, block: CompareBlockDto): VariantHighlight[] {
+  const highlights = new Map<string, VariantHighlight>();
+
+  for (const variant of changedVariants(block)) {
+    const diff = inlineDiff(block, variant.text);
+    const sourceText = changedText(diff.reference, "removed");
+    const alternativeText = changedText(diff.alternative, "added");
+    if (!sourceText || !alternativeText) {
+      continue;
+    }
+
+    const key = sourceText.toLocaleLowerCase();
+    const highlight = highlights.get(key) ?? {
+      id: `${block.anchor.block_key}-${block.block_index}-${highlights.size}`,
+      sourceText,
+      variants: [],
+    };
+    highlight.variants.push({
+      variant,
+      submission: submissionById(item, variant.alternative_submission_id),
+      text: alternativeText,
+    });
+    highlights.set(key, highlight);
+  }
+
+  return [...highlights.values()];
+}
+
+function mainSegments(item: SectionCompareItem, block: CompareBlockDto) {
+  const highlights = blockHighlights(item, block);
+  if (!highlights.length) {
+    return [{ text: block.main_text, highlight: null as VariantHighlight | null }];
+  }
+
+  const sorted = [...highlights].sort((left, right) => right.sourceText.length - left.sourceText.length);
+  const segments: Array<{ text: string; highlight: VariantHighlight | null }> = [];
+  let remaining = block.main_text;
+
+  while (remaining.length) {
+    let bestIndex = -1;
+    let bestHighlight: VariantHighlight | null = null;
+
+    for (const highlight of sorted) {
+      const index = remaining.toLocaleLowerCase().indexOf(highlight.sourceText.toLocaleLowerCase());
+      if (index >= 0 && (bestIndex === -1 || index < bestIndex)) {
+        bestIndex = index;
+        bestHighlight = highlight;
+      }
+    }
+
+    if (!bestHighlight || bestIndex < 0) {
+      segments.push({ text: remaining, highlight: null });
+      break;
+    }
+
+    if (bestIndex > 0) {
+      segments.push({ text: remaining.slice(0, bestIndex), highlight: null });
+    }
+
+    const highlightedText = remaining.slice(bestIndex, bestIndex + bestHighlight.sourceText.length);
+    segments.push({ text: highlightedText, highlight: bestHighlight });
+    remaining = remaining.slice(bestIndex + bestHighlight.sourceText.length);
+  }
+
+  return segments;
 }
 
 async function loadDocument() {
@@ -200,11 +322,8 @@ onMounted(async () => {
           <div class="compare-panel-header">
             <div>
               <p class="eyebrow">Compare</p>
-              <h2>Aligned variants</h2>
+              <h2>Main text with variants</h2>
             </div>
-            <p class="compare-copy">
-              Shared wording stays plain. Differences are marked directly inside the main text and each alternative.
-            </p>
           </div>
 
           <p v-if="isLoadingCompares">Loading comparisons...</p>
@@ -231,96 +350,78 @@ onMounted(async () => {
                 </RouterLink>
               </header>
 
-              <div v-if="item.submissions.length" class="rank-strip">
-                <span
-                  v-for="submission in item.submissions"
-                  :key="submission.submission_id"
-                  class="rank-pill"
-                  :class="{ main: submission.submission_id === item.compare?.main_submission.submission_id }"
-                >
-                  <span class="rank-marker">{{ submission.rank }}</span>
-                  <span>{{ submission.display_name }} @{{ submission.username }}</span>
-                  <span v-if="submission.support_percent !== null" class="support-pill">
-                    {{ supportLabel(submission.support_percent) }}
-                  </span>
-                </span>
-              </div>
-
               <div v-if="item.compare?.blocks.length" class="block-list">
-                <article
+                <section
                   v-for="block in item.compare.blocks"
                   :key="`${item.section.id}-${block.anchor.block_key}-${block.block_index}`"
                   class="block-card"
+                  :class="{ changed: changedVariants(block).length > 0 }"
                 >
-                  <div v-if="changedVariants(block).length" class="variant-list">
-                    <article
-                      v-for="variant in changedVariants(block)"
-                      :key="`${block.anchor.block_key}-${variant.alternative_submission_id}-${variant.alternative_index}`"
-                      class="variant-card"
+                  <p class="main-block-text">
+                    <template
+                      v-for="(segment, segmentIndex) in mainSegments(item, block)"
+                      :key="`${block.anchor.block_key}-${block.block_index}-${segmentIndex}`"
                     >
-                      <header class="variant-header">
-                        <strong class="variant-meta">
-                          <span class="rank-marker">
-                            {{
-                              submissionById(item, variant.alternative_submission_id)?.rank !== undefined
-                                ? submissionById(item, variant.alternative_submission_id)!.rank
-                                : "?"
-                            }}
-                          </span>
-                          <span>
-                            {{
-                              submissionById(item, variant.alternative_submission_id)
-                                ? submissionLabel(submissionById(item, variant.alternative_submission_id)!)
-                                : "Unknown alternative"
-                            }}
-                          </span>
-                        </strong>
-                        <span
-                          v-if="submissionById(item, variant.alternative_submission_id)?.support_percent !== null"
-                          class="support-pill"
+                      <span v-if="!segment.highlight">{{ segment.text }}</span>
+                      <span
+                        v-else
+                        class="inline-variant-wrap"
+                        :class="{
+                          open: isVariantPanelOpen(item.section.id, segment.highlight.id),
+                          dismissed: isVariantPanelDismissed(item.section.id, segment.highlight.id),
+                        }"
+                        @mouseleave="clearDismissedVariantPanel(item.section.id, segment.highlight.id)"
+                      >
+                        <button
+                          class="inline-variant-marker"
+                          type="button"
+                          :aria-expanded="isVariantPanelOpen(item.section.id, segment.highlight.id)"
+                          @click="handleVariantMarkerClick(item.section.id, segment.highlight.id, $event)"
+                          @keyup.esc="closeVariantPanel"
                         >
-                          {{ supportLabel(submissionById(item, variant.alternative_submission_id)!.support_percent) }}
-                        </span>
-                      </header>
+                          {{ segment.text }}
+                        </button>
 
-                      <div class="comparison-columns">
-                        <section class="diff-pane main-pane">
-                          <header class="diff-pane-header">
+                        <aside class="variant-popover">
+                          <header class="popover-header">
                             <span class="block-kind">{{ blockLabel(block) }}</span>
-                            <span class="diff-label">Main</span>
-                          </header>
-                          <p class="diff-text">
-                            <template
-                              v-for="(segment, index) in inlineDiff(block, variant.text).reference"
-                              :key="`main-${block.block_index}-${variant.alternative_submission_id}-${index}`"
+                            <strong>
+                              {{ segment.highlight.variants.length }} variant{{ segment.highlight.variants.length === 1 ? "" : "s" }}
+                            </strong>
+                            <button
+                              class="popover-close"
+                              type="button"
+                              aria-label="Close variants"
+                              @click="handleCloseVariantPanel"
                             >
-                              <span class="diff-segment" :class="segmentClass(segment.kind)">{{ segment.text }}</span>
-                            </template>
-                          </p>
-                        </section>
+                              x
+                            </button>
+                          </header>
 
-                        <section class="diff-pane alt-pane">
-                          <header class="diff-pane-header">
-                            <span class="block-kind">{{ blockLabel(block) }}</span>
-                            <span class="diff-label">Alternative</span>
-                          </header>
-                          <p class="diff-text">
-                            <template
-                              v-for="(segment, index) in inlineDiff(block, variant.text).alternative"
-                              :key="`alt-${block.block_index}-${variant.alternative_submission_id}-${index}`"
-                            >
-                              <span class="diff-segment" :class="segmentClass(segment.kind)">{{ segment.text }}</span>
-                            </template>
-                          </p>
-                        </section>
-                      </div>
-                    </article>
-                  </div>
-                  <div v-else class="all-equal-note">
-                    <span class="block-kind">{{ blockLabel(block) }}</span>
-                    <span>All visible alternatives match this block.</span>
-                  </div>
-                </article>
+                          <article
+                            v-for="entry in segment.highlight.variants"
+                            :key="`${segment.highlight.id}-${entry.variant.alternative_submission_id}-${entry.variant.alternative_index}`"
+                            class="variant-card"
+                          >
+                            <header class="variant-header">
+                              <strong class="variant-meta">
+                                <span class="rank-marker">{{ entry.submission?.rank ?? "?" }}</span>
+                                <span>
+                                  {{ entry.submission ? submissionLabel(entry.submission) : "Unknown alternative" }}
+                                </span>
+                              </strong>
+                              <span v-if="entry.submission?.support_percent !== null" class="support-pill">
+                                {{ supportLabel(entry.submission!.support_percent) }}
+                              </span>
+                            </header>
+
+                            <p class="variant-replacement">{{ entry.text }}</p>
+                          </article>
+                        </aside>
+                      </span>
+                    </template>
+                  </p>
+                </section>
               </div>
               <p v-else class="empty-note">No published version yet.</p>
             </article>
@@ -336,9 +437,7 @@ onMounted(async () => {
 
 .compare-panel,
 .compare-section,
-.block-card,
-.variant-card,
-.diff-pane {
+.variant-card {
   border: 1px solid rgba(35, 24, 15, 0.08);
 }
 
@@ -361,21 +460,18 @@ onMounted(async () => {
 }
 
 .compare-panel-header h2,
-.compare-copy,
 .compare-section-header h3,
 .main-meta,
 .empty-note {
   margin: 0;
 }
 
-.compare-copy,
 .main-meta {
   color: #6f5947;
 }
 
 .compare-sections,
-.block-list,
-.variant-list {
+.block-list {
   display: flex;
   flex-direction: column;
 }
@@ -414,13 +510,6 @@ onMounted(async () => {
   font-variant-numeric: tabular-nums;
 }
 
-.rank-strip {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.6rem;
-}
-
-.rank-pill,
 .support-pill {
   display: inline-flex;
   align-items: center;
@@ -428,16 +517,6 @@ onMounted(async () => {
   border-radius: 999px;
   font-size: 0.78rem;
   white-space: nowrap;
-}
-
-.rank-pill {
-  padding: 0.45rem 0.75rem;
-  background: rgba(142, 75, 22, 0.08);
-  color: #58351a;
-}
-
-.rank-pill.main {
-  background: rgba(142, 75, 22, 0.18);
 }
 
 .support-pill {
@@ -453,71 +532,134 @@ onMounted(async () => {
 }
 
 .block-list {
-  gap: 0.9rem;
+  gap: 0.45rem;
 }
 
-.block-card,
-.variant-card,
-.diff-pane {
+.block-card {
+  position: relative;
+  padding: 0.2rem 0;
+  border-radius: 0.4rem;
+}
+
+.block-card.changed {
+  background: linear-gradient(90deg, rgba(142, 75, 22, 0.08), rgba(142, 75, 22, 0));
+}
+
+.main-block-text {
+  margin: 0;
+  white-space: pre-wrap;
+  font-family: inherit;
+  line-height: 1.65;
+  color: #22150d;
+}
+
+.inline-variant-wrap {
+  position: relative;
+  display: inline-block;
+  z-index: 1;
+}
+
+.inline-variant-wrap.open,
+.inline-variant-wrap:not(.dismissed):hover,
+.inline-variant-wrap:focus-within {
+  z-index: 1000;
+}
+
+.inline-variant-marker {
+  display: inline;
+  border: 0;
+  border-radius: 0.25rem;
+  padding: 0.04rem 0.16rem;
+  background: rgba(142, 75, 22, 0.16);
+  color: #8e4b16;
+  font: inherit;
+  text-decoration: underline;
+  text-decoration-thickness: 0.12em;
+  text-underline-offset: 0.16em;
+  text-decoration-color: rgba(142, 75, 22, 0.42);
+  cursor: pointer;
+}
+
+.inline-variant-marker:hover,
+.inline-variant-wrap.open .inline-variant-marker {
+  background: rgba(142, 75, 22, 0.24);
+}
+
+.inline-variant-marker:focus-visible {
+  outline: 2px solid rgba(142, 75, 22, 0.5);
+  outline-offset: 3px;
+}
+
+.variant-popover {
+  position: absolute;
+  top: 2.45rem;
+  left: 0;
+  display: none;
+  width: min(44rem, calc(100vw - 4rem));
+  max-height: min(70vh, 44rem);
+  overflow: auto;
+  padding: 0.9rem;
+  border: 1px solid rgba(35, 24, 15, 0.12);
+  border-radius: 0.8rem;
+  background-color: #fffdf9;
+  box-shadow: 0 1.5rem 3rem rgba(35, 24, 15, 0.18);
+  color: #22150d;
+  opacity: 1;
+  z-index: 1001;
+}
+
+.inline-variant-wrap.open .variant-popover,
+.inline-variant-wrap:not(.open):not(.dismissed):hover .variant-popover,
+.inline-variant-wrap:not(.open):not(.dismissed) .inline-variant-marker:focus + .variant-popover,
+.inline-variant-wrap:not(.open):not(.dismissed) .variant-popover:hover,
+.inline-variant-wrap:not(.open):not(.dismissed) .variant-popover:focus-within {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  padding: 0.95rem;
-  border-radius: 1rem;
+}
+
+.popover-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: baseline;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid rgba(35, 24, 15, 0.08);
+}
+
+.popover-close {
+  display: inline-grid;
+  width: 1.8rem;
+  height: 1.8rem;
+  place-items: center;
+  border: 1px solid rgba(35, 24, 15, 0.12);
+  border-radius: 999px;
   background: white;
+  color: #6f5947;
+  cursor: pointer;
+  font: inherit;
+  line-height: 1;
+}
+
+.popover-close:hover,
+.popover-close:focus-visible {
+  color: #8e2f23;
+  border-color: rgba(142, 47, 35, 0.24);
 }
 
 .block-kind {
   text-transform: capitalize;
   color: #8e4b16;
   font-size: 0.8rem;
-  letter-spacing: 0.04em;
-}
-
-.variant-list {
-  gap: 0.75rem;
 }
 
 .variant-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 0.8rem;
+  border-radius: 0.55rem;
   background: #fff8ef;
-}
-
-.comparison-columns {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.75rem;
-}
-
-.diff-pane {
-  background: rgba(255, 255, 255, 0.78);
-}
-
-.main-pane {
-  background: #fffdf9;
-}
-
-.alt-pane {
-  background: #fff9f1;
-}
-
-.diff-pane-header {
-  display: flex;
-  justify-content: space-between;
-  gap: 0.75rem;
-  align-items: baseline;
-}
-
-.diff-label,
-.all-equal-note {
-  color: #6f5947;
-  font-size: 0.84rem;
-}
-
-.all-equal-note {
-  display: flex;
-  justify-content: space-between;
-  gap: 1rem;
-  align-items: baseline;
 }
 
 .variant-meta {
@@ -527,30 +669,17 @@ onMounted(async () => {
   font-weight: 600;
 }
 
-.diff-text {
+.variant-replacement {
   margin: 0;
   white-space: pre-wrap;
-  line-height: 1.55;
-  font-size: 0.98rem;
-}
-
-.diff-segment {
-  white-space: pre-wrap;
-}
-
-.diff-segment.removed {
-  background: rgba(192, 74, 53, 0.14);
-  color: #8e2f23;
-  text-decoration: line-through;
-}
-
-.diff-segment.added {
-  background: rgba(82, 131, 61, 0.16);
-  color: #335f28;
-}
-
-.diff-segment.unchanged {
   color: #22150d;
+  line-height: 1.5;
+}
+
+.variant-replacement::before {
+  content: "-> ";
+  color: #335f28;
+  font-weight: 700;
 }
 
 @media (max-width: 960px) {
@@ -560,8 +689,11 @@ onMounted(async () => {
     flex-direction: column;
   }
 
-  .comparison-columns {
-    grid-template-columns: 1fr;
+  .variant-popover {
+    position: fixed;
+    inset: auto 1rem 1rem 1rem;
+    width: auto;
+    max-height: 72vh;
   }
 }
 </style>
