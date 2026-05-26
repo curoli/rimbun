@@ -5,7 +5,7 @@ import { RouterLink } from "vue-router";
 const props = defineProps<{
   documentId: string;
   canManageOutline?: boolean;
-  activeView: "reader" | "compare" | "edit" | "outline";
+  activeView: "reader" | "edit" | "outline";
   sectionId?: string | null;
 }>();
 
@@ -16,9 +16,6 @@ const editTarget = computed(() => (props.sectionId ? `/sections/${props.sectionI
   <nav class="view-nav" aria-label="Document views">
     <RouterLink :class="{ active: activeView === 'reader' }" :to="`/documents/${documentId}`">
       Read
-    </RouterLink>
-    <RouterLink :class="{ active: activeView === 'compare' }" :to="`/documents/${documentId}/compare`">
-      Compare
     </RouterLink>
     <RouterLink
       v-if="editTarget"

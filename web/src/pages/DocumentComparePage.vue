@@ -306,7 +306,7 @@ onMounted(async () => {
             :document-id="documentData.document.id"
             :can-manage-outline="canManageOutline"
             :section-id="selectedSectionId"
-            active-view="compare"
+            active-view="reader"
           />
         </div>
       </section>
@@ -319,13 +319,6 @@ onMounted(async () => {
         />
 
         <section class="compare-panel">
-          <div class="compare-panel-header">
-            <div>
-              <p class="eyebrow">Compare</p>
-              <h2>Main text with variants</h2>
-            </div>
-          </div>
-
           <p v-if="isLoadingCompares">Loading comparisons...</p>
           <div v-else class="compare-sections">
             <article
@@ -341,9 +334,14 @@ onMounted(async () => {
                     <span class="section-number">{{ item.number }}</span>
                     {{ item.section.title }}
                   </h3>
-                  <p v-if="item.compare" class="main-meta">
-                    Main: {{ submissionLabel(item.compare.main_submission) }}
-                  </p>
+                  <div class="section-meta">
+                    <span v-if="item.compare">
+                      {{ submissionLabel(item.compare.main_submission) }}
+                    </span>
+                    <span v-if="item.compare?.alternatives.length" class="reader-badge">
+                      {{ item.compare.alternatives.length }} alternative{{ item.compare.alternatives.length === 1 ? "" : "s" }}
+                    </span>
+                  </div>
                 </div>
                 <RouterLink class="edit-link" :to="`/sections/${item.section.id}/edit`">
                   Edit this section
@@ -436,7 +434,6 @@ onMounted(async () => {
 @import "./document-shared.css";
 
 .compare-panel,
-.compare-section,
 .variant-card {
   border: 1px solid rgba(35, 24, 15, 0.08);
 }
@@ -484,19 +481,40 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: 1rem;
-  padding: 1rem;
-  border-radius: 1rem;
-  background: #fffdf9;
+  padding-top: 2rem;
+  border-top: 1px solid rgba(35, 24, 15, 0.1);
+}
+
+.compare-section:first-child {
+  padding-top: 0;
+  border-top: 0;
 }
 
 .compare-section.active {
-  box-shadow: inset 0 0 0 2px rgba(142, 75, 22, 0.22);
+  scroll-margin-top: 5rem;
 }
 
 .section-heading {
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
+}
+
+.section-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  min-height: 1.8rem;
+  color: #6f5947;
+  font-size: 0.88rem;
+}
+
+.reader-badge {
+  padding: 0.35rem 0.6rem;
+  border-radius: 999px;
+  background: #f1dcc4;
+  color: #6f5947;
+  font-size: 0.88rem;
 }
 
 .edit-link {

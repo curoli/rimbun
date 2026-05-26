@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 
 import type { SectionRecord } from "../api/types";
 import { buildSectionNumbers } from "../section-numbering";
@@ -16,6 +16,18 @@ const emit = defineEmits<{
 function depthFor(path: string) {
   return path.split("/").length - 1;
 }
+
+const collapsedSectionIds = ref(new Set<string>());
+
+const childCounts = computed(() => {
+  const counts = new Map<string, number>();
+  for (const section of props.sections) {
+    if (section.parent_id) {
+      counts.set(section.parent_id, (counts.get(section.parent_id) ?? 0) + 1);
+    }
+  }
+  return counts;
+});
 
 const orderedSections = computed(() => {
   const byParent = new Map<string | null, SectionRecord[]>();
@@ -36,7 +48,9 @@ const orderedSections = computed(() => {
     const children = byParent.get(parentId) ?? [];
     for (const child of children) {
       result.push(child);
-      visit(child.id);
+      if (!collapsedSectionIds.value.has(child.id)) {
+        visit(child.id);
+      }
     }
   }
 
@@ -45,6 +59,30 @@ const orderedSections = computed(() => {
 });
 
 const sectionNumbers = computed(() => buildSectionNumbers(props.sections));
+
+function hasChildren(sectionId: string) {
+  return (childCounts.value.get(sectionId) ?? 0) > 0;
+}
+
+function isCollapsed(sectionId: string) {
+  return collapsedSectionIds.value.has(sectionId);
+}
+
+function handleSectionClick(section: SectionRecord) {
+  emit("select", section.id);
+
+  if (!hasChildren(section.id)) {
+    return;
+  }
+
+  const next = new Set(collapsedSectionIds.value);
+  if (next.has(section.id)) {
+    next.delete(section.id);
+  } else {
+    next.add(section.id);
+  }
+  collapsedSectionIds.value = next;
+}
 </script>
 
 <template>
@@ -59,8 +97,11 @@ const sectionNumbers = computed(() => buildSectionNumbers(props.sections));
       class="tree-row"
       :class="{ active: section.id === activeSectionId }"
       :style="{ paddingLeft: `${1 + depthFor(section.path) * 1.1}rem` }"
-      @click="emit('select', section.id)"
+      @click="handleSectionClick(section)"
     >
+      <span class="tree-toggle" :class="{ hidden: !hasChildren(section.id) }">
+        {{ isCollapsed(section.id) ? ">" : "v" }}
+      </span>
       <span class="tree-number">{{ sectionNumbers.get(section.id)?.full }}</span>
       <span class="tree-title">{{ section.title }}</span>
     </button>
@@ -95,7 +136,7 @@ const sectionNumbers = computed(() => buildSectionNumbers(props.sections));
 .tree-row {
   display: flex;
   align-items: baseline;
-  gap: 0.65rem;
+  gap: 0.5rem;
   text-align: left;
   border: 0;
   border-radius: 0.9rem;
@@ -110,6 +151,17 @@ const sectionNumbers = computed(() => buildSectionNumbers(props.sections));
 .tree-row.active {
   background: #f1dcc4;
   transform: translateX(2px);
+}
+
+.tree-toggle {
+  width: 0.8rem;
+  color: #8e4b16;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.tree-toggle.hidden {
+  visibility: hidden;
 }
 
 .tree-number {
