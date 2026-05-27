@@ -121,7 +121,46 @@ The Vite dev server proxies `/api` requests to the Rust backend. Open the URL sh
 http://127.0.0.1:5173
 ```
 
-### 6. First local workflow
+### 6. Development service manager
+
+You can also run the local stack through the repository script:
+
+```bash
+./rimbunctl dev start
+```
+
+Available commands:
+
+```bash
+./rimbunctl dev start [service]
+./rimbunctl dev stop [service]
+./rimbunctl dev restart [service]
+./rimbunctl dev log [service] [--follow]
+```
+
+Supported services:
+
+- `db`
+- `embedding`
+- `backend`
+- `frontend`
+- `all`
+
+Runtime state is written under `.rimbun/dev/`:
+
+- logs: `.rimbun/dev/logs/*.log`
+- pids: `.rimbun/dev/pids/*.pid`
+
+Examples:
+
+```bash
+./rimbunctl dev start
+./rimbunctl dev restart backend
+./rimbunctl dev log frontend --follow
+./rimbunctl dev log all
+```
+
+### 7. First local workflow
 
 After registering the first account, it will be a normal user by default. To test outline editing, promote it manually in Postgres:
 

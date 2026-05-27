@@ -29,3 +29,6 @@ web/playwright-report/
 # Local environment configuration
 .env
 .env.local
+
+# Local service manager runtime state
+.rimbun/

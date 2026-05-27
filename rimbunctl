@@ -1,0 +1,335 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+PROFILE="${1:-}"
+COMMAND="${2:-}"
+THIRD_ARG="${3:-}"
+FOURTH_ARG="${4:-}"
+
+STATE_DIR="$SCRIPT_DIR/.rimbun"
+PROFILE_DIR="$STATE_DIR/$PROFILE"
+LOG_DIR="$PROFILE_DIR/logs"
+PID_DIR="$PROFILE_DIR/pids"
+RUN_DIR="$PROFILE_DIR/run"
+
+SERVICE="all"
+FOLLOW_FLAG=""
+
+if [[ "$COMMAND" == "log" ]]; then
+  if [[ "$THIRD_ARG" == "--follow" || "$THIRD_ARG" == "-f" ]]; then
+    FOLLOW_FLAG="$THIRD_ARG"
+  else
+    SERVICE="${THIRD_ARG:-all}"
+    FOLLOW_FLAG="$FOURTH_ARG"
+  fi
+else
+  SERVICE="${THIRD_ARG:-all}"
+fi
+
+SERVICES=(db embedding backend frontend)
+STOP_ORDER=(frontend backend embedding db)
+
+usage() {
+  cat <<'EOF'
+Usage:
+  ./rimbunctl <profile> <command> [service] [options]
+
+Profiles:
+  dev
+
+Commands:
+  start [service|all]
+  stop [service|all]
+  restart [service|all]
+  log [service|all] [--follow|-f]
+
+Services:
+  db
+  embedding
+  backend
+  frontend
+  all
+EOF
+}
+
+die() {
+  printf 'Error: %s\n' "$1" >&2
+  exit 1
+}
+
+ensure_profile() {
+  [[ "$PROFILE" == "dev" ]] || die "unsupported profile '$PROFILE'"
+}
+
+ensure_state_dirs() {
+  mkdir -p "$LOG_DIR" "$PID_DIR" "$RUN_DIR"
+}
+
+is_valid_service() {
+  [[ "$1" == "all" ]] && return 0
+  for service in "${SERVICES[@]}"; do
+    [[ "$service" == "$1" ]] && return 0
+  done
+  return 1
+}
+
+service_list_for() {
+  local requested="$1"
+  if [[ "$requested" == "all" ]]; then
+    printf '%s\n' "${SERVICES[@]}"
+  else
+    printf '%s\n' "$requested"
+  fi
+}
+
+stop_list_for() {
+  local requested="$1"
+  if [[ "$requested" == "all" ]]; then
+    printf '%s\n' "${STOP_ORDER[@]}"
+  else
+    printf '%s\n' "$requested"
+  fi
+}
+
+pid_file() {
+  printf '%s/%s.pid\n' "$PID_DIR" "$1"
+}
+
+log_file() {
+  printf '%s/%s.log\n' "$LOG_DIR" "$1"
+}
+
+fifo_file() {
+  printf '%s/%s.pipe\n' "$RUN_DIR" "$1"
+}
+
+is_pid_running() {
+  local pid="$1"
+  [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
+}
+
+service_status() {
+  local service="$1"
+  local pid_path
+  pid_path="$(pid_file "$service")"
+  if [[ ! -f "$pid_path" ]]; then
+    return 1
+  fi
+
+  local service_pid logger_pid
+  service_pid="$(awk -F= '$1=="service_pid"{print $2}' "$pid_path")"
+  logger_pid="$(awk -F= '$1=="logger_pid"{print $2}' "$pid_path")"
+
+  if is_pid_running "$service_pid" || is_pid_running "$logger_pid"; then
+    return 0
+  fi
+
+  rm -f "$pid_path"
+  return 1
+}
+
+write_pid_file() {
+  local service="$1"
+  local service_pid="$2"
+  local logger_pid="$3"
+  cat >"$(pid_file "$service")" <<EOF
+service_pid=$service_pid
+logger_pid=$logger_pid
+EOF
+}
+
+start_logged_command() {
+  local service="$1"
+  local workdir="$2"
+  local command="$3"
+
+  ensure_state_dirs
+
+  local log_path fifo_path service_pid logger_pid
+  log_path="$(log_file "$service")"
+  fifo_path="$(fifo_file "$service")"
+
+  : >"$log_path"
+  rm -f "$fifo_path"
+  mkfifo "$fifo_path"
+
+  tee -a "$log_path" <"$fifo_path" &
+  logger_pid=$!
+
+  (
+    cd "$workdir"
+    bash -lc "$command"
+  ) >"$fifo_path" 2>&1 &
+  service_pid=$!
+
+  rm -f "$fifo_path"
+  write_pid_file "$service" "$service_pid" "$logger_pid"
+  printf 'Started %s\n' "$service"
+}
+
+stop_logged_command() {
+  local service="$1"
+  local pid_path
+  pid_path="$(pid_file "$service")"
+  [[ -f "$pid_path" ]] || return 0
+
+  local service_pid logger_pid
+  service_pid="$(awk -F= '$1=="service_pid"{print $2}' "$pid_path")"
+  logger_pid="$(awk -F= '$1=="logger_pid"{print $2}' "$pid_path")"
+
+  if is_pid_running "$service_pid"; then
+    kill "$service_pid" 2>/dev/null || true
+    wait "$service_pid" 2>/dev/null || true
+  fi
+
+  if is_pid_running "$logger_pid"; then
+    kill "$logger_pid" 2>/dev/null || true
+    wait "$logger_pid" 2>/dev/null || true
+  fi
+
+  rm -f "$pid_path"
+}
+
+start_db() {
+  docker compose up -d postgres
+  start_logged_command "db" "$SCRIPT_DIR" "docker compose logs -f postgres"
+}
+
+stop_db() {
+  stop_logged_command "db"
+  docker compose stop postgres >/dev/null
+  printf 'Stopped db\n'
+}
+
+start_embedding() {
+  start_logged_command "embedding" "$SCRIPT_DIR" "cargo run -p rimbun-embedding-service"
+}
+
+stop_embedding() {
+  stop_logged_command "embedding"
+  printf 'Stopped embedding\n'
+}
+
+start_backend() {
+  start_logged_command "backend" "$SCRIPT_DIR" "cargo run -p rimbun-api"
+}
+
+stop_backend() {
+  stop_logged_command "backend"
+  printf 'Stopped backend\n'
+}
+
+start_frontend() {
+  if [[ ! -d "$SCRIPT_DIR/web/node_modules" ]]; then
+    (
+      cd "$SCRIPT_DIR/web"
+      npm install
+    )
+  fi
+  start_logged_command "frontend" "$SCRIPT_DIR/web" "npm run dev -- --host 127.0.0.1 --port 5173"
+}
+
+stop_frontend() {
+  stop_logged_command "frontend"
+  printf 'Stopped frontend\n'
+}
+
+start_service() {
+  local service="$1"
+  if service_status "$service"; then
+    printf '%s already running\n' "$service"
+    return 0
+  fi
+
+  case "$service" in
+    db) start_db ;;
+    embedding) start_embedding ;;
+    backend) start_backend ;;
+    frontend) start_frontend ;;
+    *) die "unknown service '$service'" ;;
+  esac
+}
+
+stop_service() {
+  local service="$1"
+  case "$service" in
+    db) stop_db ;;
+    embedding) stop_embedding ;;
+    backend) stop_backend ;;
+    frontend) stop_frontend ;;
+    *) die "unknown service '$service'" ;;
+  esac
+}
+
+show_logs() {
+  local service="$1"
+  local follow="$2"
+
+  if [[ "$service" == "all" ]]; then
+    if [[ "$follow" == "1" ]]; then
+      local files=()
+      for item in "${SERVICES[@]}"; do
+        files+=("$(log_file "$item")")
+      done
+      tail -n 200 -f "${files[@]}"
+    else
+      for item in "${SERVICES[@]}"; do
+        printf '\n== %s ==\n' "$item"
+        [[ -f "$(log_file "$item")" ]] && tail -n 80 "$(log_file "$item")"
+      done
+    fi
+    return 0
+  fi
+
+  local file
+  file="$(log_file "$service")"
+  [[ -f "$file" ]] || die "no log file for service '$service'"
+  if [[ "$follow" == "1" ]]; then
+    tail -n 200 -f "$file"
+  else
+    tail -n 80 "$file"
+  fi
+}
+
+[[ -n "$PROFILE" && -n "$COMMAND" ]] || {
+  usage
+  exit 1
+}
+
+ensure_profile
+is_valid_service "$SERVICE" || die "unknown service '$SERVICE'"
+ensure_state_dirs
+
+case "$COMMAND" in
+  start)
+    while IFS= read -r service; do
+      start_service "$service"
+    done < <(service_list_for "$SERVICE")
+    ;;
+  stop)
+    while IFS= read -r service; do
+      stop_service "$service"
+    done < <(stop_list_for "$SERVICE")
+    ;;
+  restart)
+    while IFS= read -r service; do
+      stop_service "$service"
+    done < <(stop_list_for "$SERVICE")
+    while IFS= read -r service; do
+      start_service "$service"
+    done < <(service_list_for "$SERVICE")
+    ;;
+  log)
+    case "$FOLLOW_FLAG" in
+      ""|--follow|-f) ;;
+      *) die "unknown log option '$FOLLOW_FLAG'" ;;
+    esac
+    show_logs "$SERVICE" "$([[ "$FOLLOW_FLAG" == "--follow" || "$FOLLOW_FLAG" == "-f" ]] && echo 1 || echo 0)"
+    ;;
+  *)
+    usage
+    die "unknown command '$COMMAND'"
+    ;;
+esac
