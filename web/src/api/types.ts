@@ -132,3 +132,48 @@ export type SectionCompareDto = {
   alternatives: SubmissionSummaryDto[];
   blocks: CompareBlockDto[];
 };
+
+export type VariantCollectionRecord = {
+  id: string;
+  name: string;
+  description: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type VariantEntryRecord = {
+  id: string;
+  collection_id: string;
+  position: number;
+  label: string;
+  username_hint: string | null;
+  markdown_content: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TestRunRecord = {
+  id: string;
+  collection_id: string;
+  document_id: string | null;
+  section_id: string | null;
+  status: "active" | "deleted";
+  created_by: string;
+  created_at: string;
+  finished_at: string | null;
+  deleted_at: string | null;
+};
+
+export type VariantCollectionDetail = {
+  collection: VariantCollectionRecord;
+  entries: VariantEntryRecord[];
+  runs: TestRunRecord[];
+};
+
+export type RunCollectionResponse = {
+  run: TestRunRecord;
+  document: DocumentRecord;
+  section: SectionRecord;
+  created_users: number;
+};

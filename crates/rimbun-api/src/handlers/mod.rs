@@ -1,3 +1,4 @@
+pub mod admin_variants;
 pub mod auth;
 pub mod compare;
 pub mod documents;

@@ -179,6 +179,49 @@ async fn seed_single_section_document(
     (document_id, section_id)
 }
 
+async fn seed_variant_collection(
+    pool: &PgPool,
+    created_by: uuid::Uuid,
+) -> uuid::Uuid {
+    let collection_id = uuid::Uuid::new_v4();
+    sqlx::query(
+        r#"
+        insert into variant_collections (id, name, description, created_by)
+        values ($1, $2, $3, $4)
+        "#,
+    )
+    .bind(collection_id)
+    .bind("Cities")
+    .bind("Variant collection for test runs")
+    .bind(created_by)
+    .execute(pool)
+    .await
+    .expect("insert variant collection");
+
+    for (position, label, username_hint, markdown_content) in [
+        (0_i32, "Alice Variant", Some("alice"), "Helaragon kommt aus Bandung."),
+        (1_i32, "Bob Variant", Some("bob"), "Burgerkill kommt aus Bandung."),
+    ] {
+        sqlx::query(
+            r#"
+            insert into variant_entries (id, collection_id, position, label, username_hint, markdown_content)
+            values ($1, $2, $3, $4, $5, $6)
+            "#,
+        )
+        .bind(uuid::Uuid::new_v4())
+        .bind(collection_id)
+        .bind(position)
+        .bind(label)
+        .bind(username_hint)
+        .bind(markdown_content)
+        .execute(pool)
+        .await
+        .expect("insert variant entry");
+    }
+
+    collection_id
+}
+
 fn test_config(database_url: String) -> Config {
     Config {
         port: 0,
@@ -828,6 +871,104 @@ async fn moderation_hidden_and_soft_deleted_remove_visibility_and_projection() {
             .await
             .expect("projection count after delete");
     assert_eq!(projection_after_delete, 0);
+}
+
+#[tokio::test]
+async fn admin_can_create_and_delete_test_run_from_variant_collection() {
+    let Some(pool) = test_pool().await else {
+        eprintln!("Skipping integration test: TEST_DATABASE_URL not set or unreachable");
+        return;
+    };
+    reset_schema(&pool).await;
+
+    let (admin_id, admin_session) = seed_privileged_user(&pool).await;
+    let collection_id = seed_variant_collection(&pool, admin_id).await;
+
+    let app = app::build(test_config(
+        std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL"),
+    ))
+    .await
+    .expect("build app");
+
+    let create_request = Request::builder()
+        .method(Method::POST)
+        .uri(format!("/api/admin/variant-collections/{collection_id}/test-runs"))
+        .header(header::COOKIE, format!("rimbun_session={admin_session}"))
+        .body(Body::empty())
+        .expect("create run request");
+
+    let create_response = app.clone().oneshot(create_request).await.expect("create run response");
+    assert_eq!(create_response.status(), StatusCode::OK);
+    let create_body = to_bytes(create_response.into_body(), usize::MAX)
+        .await
+        .expect("create run body");
+    let create_json: serde_json::Value =
+        serde_json::from_slice(&create_body).expect("create run json");
+
+    let run_id = uuid::Uuid::parse_str(create_json["run"]["id"].as_str().expect("run id"))
+        .expect("run uuid");
+    let document_id =
+        uuid::Uuid::parse_str(create_json["document"]["id"].as_str().expect("document id"))
+            .expect("document uuid");
+    let section_id =
+        uuid::Uuid::parse_str(create_json["section"]["id"].as_str().expect("section id"))
+            .expect("section uuid");
+    assert_eq!(create_json["created_users"], 2);
+
+    let run_users_count = sqlx::query_scalar::<_, i64>(
+        "select count(*)::bigint from test_run_users where test_run_id = $1",
+    )
+    .bind(run_id)
+    .fetch_one(&pool)
+    .await
+    .expect("run users count");
+    assert_eq!(run_users_count, 2);
+
+    let submissions_count = sqlx::query_scalar::<_, i64>(
+        "select count(*)::bigint from submissions where section_id = $1",
+    )
+    .bind(section_id)
+    .fetch_one(&pool)
+    .await
+    .expect("submissions count");
+    assert_eq!(submissions_count, 2);
+
+    let delete_request = Request::builder()
+        .method(Method::DELETE)
+        .uri(format!("/api/admin/test-runs/{run_id}"))
+        .header(header::COOKIE, format!("rimbun_session={admin_session}"))
+        .body(Body::empty())
+        .expect("delete run request");
+
+    let delete_response = app.clone().oneshot(delete_request).await.expect("delete run response");
+    assert_eq!(delete_response.status(), StatusCode::OK);
+
+    let document_exists = sqlx::query_scalar::<_, i64>(
+        "select count(*)::bigint from documents where id = $1",
+    )
+    .bind(document_id)
+    .fetch_one(&pool)
+    .await
+    .expect("document exists");
+    assert_eq!(document_exists, 0);
+
+    let remaining_test_users = sqlx::query_scalar::<_, i64>(
+        "select count(*)::bigint from test_run_users where test_run_id = $1",
+    )
+    .bind(run_id)
+    .fetch_one(&pool)
+    .await
+    .expect("remaining run users");
+    assert_eq!(remaining_test_users, 0);
+
+    let deleted_status = sqlx::query_scalar::<_, String>(
+        "select status from test_runs where id = $1",
+    )
+    .bind(run_id)
+    .fetch_one(&pool)
+    .await
+    .expect("deleted status");
+    assert_eq!(deleted_status, "deleted");
 }
 
 #[tokio::test]

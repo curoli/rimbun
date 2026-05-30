@@ -82,3 +82,17 @@ pub async fn find_by_id(pool: &PgPool, id: uuid::Uuid) -> anyhow::Result<Option<
 
     Ok(record)
 }
+
+pub async fn delete_by_id(pool: &PgPool, id: uuid::Uuid) -> anyhow::Result<bool> {
+    let result = sqlx::query(
+        r#"
+        delete from documents
+        where id = $1
+        "#,
+    )
+    .bind(id)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected() > 0)
+}

@@ -130,3 +130,17 @@ pub async fn list_all(pool: &PgPool) -> anyhow::Result<Vec<UserRecord>> {
 
     Ok(records)
 }
+
+pub async fn delete_by_id(pool: &PgPool, user_id: uuid::Uuid) -> anyhow::Result<bool> {
+    let result = sqlx::query(
+        r#"
+        delete from users
+        where id = $1
+        "#,
+    )
+    .bind(user_id)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected() > 0)
+}

@@ -7,4 +7,6 @@ pub mod projections;
 pub mod sections;
 pub mod sessions;
 pub mod submissions;
+pub mod test_runs;
 pub mod users;
+pub mod variant_collections;

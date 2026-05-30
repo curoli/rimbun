@@ -24,6 +24,33 @@ pub async fn build(config: Config) -> anyhow::Result<Router> {
             post(crate::handlers::auth::change_password),
         )
         .route("/api/users", get(crate::handlers::users::list))
+        .route(
+            "/api/admin/variant-collections",
+            get(crate::handlers::admin_variants::list)
+                .post(crate::handlers::admin_variants::create_collection),
+        )
+        .route(
+            "/api/admin/variant-collections/{id}",
+            axum::routing::patch(crate::handlers::admin_variants::update_collection)
+                .delete(crate::handlers::admin_variants::delete_collection),
+        )
+        .route(
+            "/api/admin/variant-collections/{id}/entries",
+            post(crate::handlers::admin_variants::create_entry),
+        )
+        .route(
+            "/api/admin/variant-collections/{id}/test-runs",
+            post(crate::handlers::admin_variants::run_collection),
+        )
+        .route(
+            "/api/admin/variant-entries/{id}",
+            axum::routing::patch(crate::handlers::admin_variants::update_entry)
+                .delete(crate::handlers::admin_variants::delete_entry),
+        )
+        .route(
+            "/api/admin/test-runs/{id}",
+            axum::routing::delete(crate::handlers::admin_variants::delete_run),
+        )
         .route("/api/auth/register", post(crate::handlers::auth::register))
         .route("/api/auth/login", post(crate::handlers::auth::login))
         .route("/api/auth/logout", post(crate::handlers::auth::logout))

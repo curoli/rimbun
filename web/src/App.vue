@@ -105,6 +105,16 @@ onBeforeUnmount(() => {
               <small>See all registered users.</small>
             </RouterLink>
 
+            <RouterLink
+              v-if="canManageAccounts"
+              class="menu-link"
+              to="/admin/variant-collections"
+              @click="closeAccountMenu"
+            >
+              Variant collections
+              <small>Manage reusable test variants and generate test documents.</small>
+            </RouterLink>
+
             <div v-if="auth.availableAccounts.length" class="account-list">
               <span class="account-list-label">Available accounts</span>
               <button

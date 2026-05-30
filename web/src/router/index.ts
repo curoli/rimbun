@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from "vue-router";
 
 import AdminUsersPage from "../pages/AdminUsersPage.vue";
+import AdminVariantCollectionsPage from "../pages/AdminVariantCollectionsPage.vue";
 import DocumentOutlinePage from "../pages/DocumentOutlinePage.vue";
 import DocumentPage from "../pages/DocumentPage.vue";
 import DocumentsPage from "../pages/DocumentsPage.vue";
@@ -14,6 +15,7 @@ export const router = createRouter({
     { path: "/login", component: LoginPage },
     { path: "/profile", component: ProfilePage },
     { path: "/admin/users", component: AdminUsersPage },
+    { path: "/admin/variant-collections", component: AdminVariantCollectionsPage },
     { path: "/", component: DocumentsPage },
     { path: "/documents/:id", component: DocumentPage },
     { path: "/documents/:id/compare", redirect: (to) => `/documents/${to.params.id}` },
