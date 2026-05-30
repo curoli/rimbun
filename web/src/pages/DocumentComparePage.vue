@@ -319,7 +319,7 @@ onMounted(async () => {
         />
 
         <section class="compare-panel">
-          <p v-if="isLoadingCompares">Loading comparisons...</p>
+          <p v-if="isLoadingCompares">Loading document text...</p>
           <div v-else class="compare-sections">
             <article
               v-for="item in compareSections"
@@ -447,7 +447,6 @@ onMounted(async () => {
   background: rgba(255, 252, 247, 0.94);
 }
 
-.compare-panel-header,
 .compare-section-header,
 .variant-header {
   display: flex;
@@ -456,15 +455,9 @@ onMounted(async () => {
   align-items: flex-start;
 }
 
-.compare-panel-header h2,
 .compare-section-header h3,
-.main-meta,
 .empty-note {
   margin: 0;
-}
-
-.main-meta {
-  color: #6f5947;
 }
 
 .compare-sections,
