@@ -33,9 +33,6 @@ export function deleteVariantCollection(collectionId: string) {
 export function createVariantEntry(
   collectionId: string,
   payload: {
-    position: number;
-    label: string;
-    username_hint: string | null;
     markdown_content: string;
   },
 ) {
@@ -48,9 +45,6 @@ export function createVariantEntry(
 export function updateVariantEntry(
   entryId: string,
   payload: {
-    position: number;
-    label: string;
-    username_hint: string | null;
     markdown_content: string;
   },
 ) {

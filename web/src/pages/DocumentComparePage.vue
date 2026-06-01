@@ -26,6 +26,8 @@ type SectionCompareItem = {
 type VariantHighlight = {
   id: string;
   sourceText: string;
+  start: number;
+  end: number;
   variants: Array<{
     variant: ReturnType<typeof changedVariants>[number];
     submission: SubmissionSummaryDto | null;
@@ -169,17 +171,29 @@ function blockHighlights(item: SectionCompareItem, block: CompareBlockDto): Vari
   const highlights = new Map<string, VariantHighlight>();
 
   for (const variant of changedVariants(block)) {
-    const diff = inlineDiff(block, variant.text);
-    const sourceText = changedText(diff.reference, "removed");
-    const alternativeText = changedText(diff.alternative, "added");
-    if (!sourceText || !alternativeText) {
+    const fallbackDiff =
+      variant.reference_text && variant.text
+        ? null
+        : inlineDiff(block, variant.text);
+    const sourceText =
+      variant.reference_text?.trim()
+      || (fallbackDiff ? changedText(fallbackDiff.reference, "removed") : "")
+      || block.main_text.trim();
+    const alternativeText =
+      variant.text.trim()
+      || (fallbackDiff ? changedText(fallbackDiff.alternative, "added") : "");
+    const start = variant.reference_start ?? 0;
+    const end = variant.reference_end ?? start + sourceText.length;
+    if (!sourceText || !alternativeText || end <= start) {
       continue;
     }
 
-    const key = sourceText.toLocaleLowerCase();
+    const key = `${start}:${end}`;
     const highlight = highlights.get(key) ?? {
       id: `${block.anchor.block_key}-${block.block_index}-${highlights.size}`,
       sourceText,
+      start,
+      end,
       variants: [],
     };
     highlight.variants.push({
@@ -199,37 +213,51 @@ function mainSegments(item: SectionCompareItem, block: CompareBlockDto) {
     return [{ text: block.main_text, highlight: null as VariantHighlight | null }];
   }
 
-  const sorted = [...highlights].sort((left, right) => right.sourceText.length - left.sourceText.length);
   const segments: Array<{ text: string; highlight: VariantHighlight | null }> = [];
-  let remaining = block.main_text;
+  const boundaries = new Set<number>([0, block.main_text.length]);
+  for (const highlight of highlights) {
+    boundaries.add(highlight.start);
+    boundaries.add(highlight.end);
+  }
+  const orderedBoundaries = [...boundaries].sort((left, right) => left - right);
 
-  while (remaining.length) {
-    let bestIndex = -1;
-    let bestHighlight: VariantHighlight | null = null;
-
-    for (const highlight of sorted) {
-      const index = remaining.toLocaleLowerCase().indexOf(highlight.sourceText.toLocaleLowerCase());
-      if (index >= 0 && (bestIndex === -1 || index < bestIndex)) {
-        bestIndex = index;
-        bestHighlight = highlight;
-      }
+  for (let index = 0; index < orderedBoundaries.length - 1; index += 1) {
+    const start = orderedBoundaries[index];
+    const end = orderedBoundaries[index + 1];
+    if (end <= start) {
+      continue;
     }
 
-    if (!bestHighlight || bestIndex < 0) {
-      segments.push({ text: remaining, highlight: null });
-      break;
+    const text = block.main_text.slice(start, end);
+    const overlapping = highlights.filter((highlight) => highlight.start < end && highlight.end > start);
+    if (!overlapping.length) {
+      segments.push({ text, highlight: null });
+      continue;
     }
 
-    if (bestIndex > 0) {
-      segments.push({ text: remaining.slice(0, bestIndex), highlight: null });
-    }
-
-    const highlightedText = remaining.slice(bestIndex, bestIndex + bestHighlight.sourceText.length);
-    segments.push({ text: highlightedText, highlight: bestHighlight });
-    remaining = remaining.slice(bestIndex + bestHighlight.sourceText.length);
+    const combinedHighlight: VariantHighlight = {
+      id: `${block.anchor.block_key}-${block.block_index}-${start}-${end}`,
+      sourceText: text,
+      start,
+      end,
+      variants: dedupeHighlightVariants(overlapping.flatMap((highlight) => highlight.variants)),
+    };
+    segments.push({ text, highlight: combinedHighlight });
   }
 
   return segments;
+}
+
+function dedupeHighlightVariants(variants: VariantHighlight["variants"]) {
+  const seen = new Set<string>();
+  return variants.filter((entry) => {
+    const key = `${entry.variant.alternative_submission_id}:${entry.variant.reference_start ?? "none"}:${entry.variant.reference_end ?? "none"}:${entry.text}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
 }
 
 async function loadDocument() {

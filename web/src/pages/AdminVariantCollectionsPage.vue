@@ -30,12 +30,8 @@ const createCollectionDescription = ref("");
 
 const collectionName = ref("");
 const collectionDescription = ref("");
-
-const entryId = ref<string | null>(null);
-const entryPosition = ref(0);
-const entryLabel = ref("");
-const entryUsernameHint = ref("");
-const entryMarkdown = ref("");
+const entryDrafts = ref<Record<string, string>>({});
+const newEntryMarkdown = ref("");
 
 const isAdmin = computed(() =>
   auth.user ? ["admin", "privileged"].includes(auth.user.role) : false,
@@ -53,12 +49,17 @@ function sortCollections(items: VariantCollectionDetail[]) {
   );
 }
 
-function resetEntryForm(entry?: VariantEntryRecord) {
-  entryId.value = entry?.id ?? null;
-  entryPosition.value = entry?.position ?? ((selectedCollection.value?.entries.length ?? 0));
-  entryLabel.value = entry?.label ?? "";
-  entryUsernameHint.value = entry?.username_hint ?? "";
-  entryMarkdown.value = entry?.markdown_content ?? "";
+function variantLabel(entry: VariantEntryRecord) {
+  return entry.label.trim() || `Variant ${entry.position + 1}`;
+}
+
+function syncEntryDrafts(collection: VariantCollectionDetail | null) {
+  const drafts: Record<string, string> = {};
+  for (const entry of collection?.entries ?? []) {
+    drafts[entry.id] = entry.markdown_content;
+  }
+  entryDrafts.value = drafts;
+  newEntryMarkdown.value = "";
 }
 
 async function loadCollections() {
@@ -136,25 +137,17 @@ async function handleDeleteCollection() {
 }
 
 async function handleSaveEntry() {
-  if (!selectedCollection.value || !entryLabel.value.trim() || !entryMarkdown.value.trim()) {
+  if (!selectedCollection.value || !newEntryMarkdown.value.trim()) {
     return;
   }
   isSaving.value = true;
   error.value = null;
   try {
-    const payload = {
-      position: entryPosition.value,
-      label: entryLabel.value.trim(),
-      username_hint: entryUsernameHint.value.trim() || null,
-      markdown_content: entryMarkdown.value,
-    };
-    if (entryId.value) {
-      await updateVariantEntry(entryId.value, payload);
-    } else {
-      await createVariantEntry(selectedCollection.value.collection.id, payload);
-    }
+    await createVariantEntry(selectedCollection.value.collection.id, {
+      markdown_content: newEntryMarkdown.value,
+    });
     await loadCollections();
-    resetEntryForm();
+    newEntryMarkdown.value = "";
   } catch (saveError) {
     error.value = saveError instanceof Error ? saveError.message : "Failed to save variant";
   } finally {
@@ -162,16 +155,31 @@ async function handleSaveEntry() {
   }
 }
 
-async function handleDeleteEntry() {
-  if (!entryId.value) {
+async function handleUpdateEntry(entryId: string) {
+  const markdown = entryDrafts.value[entryId];
+  if (!markdown?.trim()) {
     return;
   }
   isSaving.value = true;
   error.value = null;
   try {
-    await deleteVariantEntry(entryId.value);
+    await updateVariantEntry(entryId, {
+      markdown_content: markdown,
+    });
     await loadCollections();
-    resetEntryForm();
+  } catch (saveError) {
+    error.value = saveError instanceof Error ? saveError.message : "Failed to save variant";
+  } finally {
+    isSaving.value = false;
+  }
+}
+
+async function handleDeleteEntry(entryId: string) {
+  isSaving.value = true;
+  error.value = null;
+  try {
+    await deleteVariantEntry(entryId);
+    await loadCollections();
   } catch (deleteError) {
     error.value = deleteError instanceof Error ? deleteError.message : "Failed to delete variant";
   } finally {
@@ -212,7 +220,7 @@ async function handleDeleteRun(runId: string) {
 watch(selectedCollection, (collection) => {
   collectionName.value = collection?.collection.name ?? "";
   collectionDescription.value = collection?.collection.description ?? "";
-  resetEntryForm();
+  syncEntryDrafts(collection);
 });
 
 onMounted(async () => {
@@ -301,42 +309,50 @@ onMounted(async () => {
             <span>{{ selectedCollection.entries.length }}</span>
           </div>
 
-          <div class="entry-list">
-            <button
+          <div class="entry-stack">
+            <article
               v-for="entry in selectedCollection.entries"
               :key="entry.id"
-              type="button"
-              class="entry-button"
-              :class="{ active: entry.id === entryId }"
-              @click="resetEntryForm(entry)"
+              class="entry-card"
             >
-              <strong>{{ entry.position + 1 }}. {{ entry.label }}</strong>
-              <small>{{ entry.username_hint || "auto username" }}</small>
-            </button>
+              <div class="panel-heading">
+                <div class="entry-heading">
+                  <h3>{{ variantLabel(entry) }}</h3>
+                  <small>Auto-generated test user and ordering metadata</small>
+                </div>
+                <button
+                  type="button"
+                  class="danger"
+                  :disabled="isSaving"
+                  @click="handleDeleteEntry(entry.id)"
+                >
+                  Delete
+                </button>
+              </div>
+              <label>
+                <span>Markdown</span>
+                <textarea v-model="entryDrafts[entry.id]" rows="10" />
+              </label>
+              <div class="action-row action-row-end">
+                <button type="button" :disabled="isSaving" @click="handleUpdateEntry(entry.id)">
+                  Save variant
+                </button>
+              </div>
+            </article>
           </div>
 
-          <div class="entry-editor">
-            <label>
-              <span>Position</span>
-              <input v-model.number="entryPosition" type="number" min="0" />
-            </label>
-            <label>
-              <span>Label</span>
-              <input v-model="entryLabel" type="text" />
-            </label>
-            <label>
-              <span>Username hint</span>
-              <input v-model="entryUsernameHint" type="text" />
-            </label>
+          <div class="entry-card entry-card-new">
+            <div class="entry-heading">
+              <h3>New Variant</h3>
+              <small>Metadata will be generated automatically when you add it.</small>
+            </div>
             <label>
               <span>Markdown</span>
-              <textarea v-model="entryMarkdown" rows="10" />
+              <textarea v-model="newEntryMarkdown" rows="10" />
             </label>
-            <div class="action-row">
-              <button type="button" class="secondary" :disabled="isSaving" @click="resetEntryForm()">New variant</button>
-              <button type="button" class="danger" :disabled="isSaving || !entryId" @click="handleDeleteEntry">Delete</button>
+            <div class="action-row action-row-end">
               <button type="button" :disabled="isSaving" @click="handleSaveEntry">
-                {{ entryId ? "Save variant" : "Add variant" }}
+                Add variant
               </button>
             </div>
           </div>
@@ -468,15 +484,13 @@ onMounted(async () => {
 }
 
 .collection-list,
-.entry-list,
 .run-list {
   display: flex;
   flex-direction: column;
   gap: 0.55rem;
 }
 
-.collection-button,
-.entry-button {
+.collection-button {
   display: flex;
   flex-direction: column;
   gap: 0.2rem;
@@ -490,16 +504,48 @@ onMounted(async () => {
 }
 
 .collection-button.active,
-.entry-button.active {
+label,
+.entry-stack,
+.entry-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.collection-button.active {
   background: #f1dcc4;
   border-color: rgba(142, 75, 22, 0.22);
 }
 
-.entry-editor,
-label {
+.entry-stack {
+  gap: 0.85rem;
+}
+
+.entry-card {
+  gap: 0.85rem;
+  padding: 1rem;
+  border-radius: 0.9rem;
+  background: rgba(250, 242, 232, 0.5);
+  border: 1px solid rgba(35, 24, 15, 0.08);
+}
+
+.entry-card-new {
+  margin-top: 0.85rem;
+}
+
+.entry-heading {
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
+  gap: 0.2rem;
+}
+
+.entry-heading h3,
+.entry-heading small {
+  margin: 0;
+}
+
+.entry-heading small {
+  color: #6f5947;
 }
 
 input,
@@ -524,6 +570,10 @@ button,
   color: white;
   cursor: pointer;
   text-decoration: none;
+}
+
+.action-row-end {
+  justify-content: flex-end;
 }
 
 button.secondary {

@@ -39,9 +39,6 @@ pub struct UpsertCollectionRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct UpsertEntryRequest {
-    pub position: i32,
-    pub label: String,
-    pub username_hint: Option<String>,
     pub markdown_content: String,
 }
 
@@ -206,18 +203,30 @@ pub async fn create_entry(
         .map_err(|err| ApiError::internal(err.to_string()))?
         .ok_or_else(|| ApiError::not_found("collection not found"))?;
 
-    if payload.label.trim().is_empty() || payload.markdown_content.trim().is_empty() {
-        return Err(ApiError::bad_request("label and markdown content are required"));
+    if payload.markdown_content.trim().is_empty() {
+        return Err(ApiError::bad_request("markdown content is required"));
     }
+
+    let existing_entries = variant_collections::list_entries(&state.pool, collection_id)
+        .await
+        .map_err(|err| ApiError::internal(err.to_string()))?;
+    let next_position = existing_entries
+        .iter()
+        .map(|entry| entry.position)
+        .max()
+        .map(|position| position + 1)
+        .unwrap_or(0);
+    let generated_label = format!("Variant {}", next_position + 1);
+    let generated_username_hint = Some(format!("variant_{}", next_position + 1));
 
     let entry = variant_collections::create_entry(
         &state.pool,
         &variant_collections::NewVariantEntry {
             id: uuid::Uuid::new_v4(),
             collection_id,
-            position: payload.position,
-            label: payload.label.trim().to_owned(),
-            username_hint: payload.username_hint.as_ref().map(|value| value.trim().to_owned()).filter(|value| !value.is_empty()),
+            position: next_position,
+            label: generated_label,
+            username_hint: generated_username_hint,
             markdown_content: payload.markdown_content,
         },
     )
@@ -236,16 +245,21 @@ pub async fn update_entry(
     let user = require_current_user(State(state.clone()), &headers).await?;
     require_admin(&user)?;
 
-    if payload.label.trim().is_empty() || payload.markdown_content.trim().is_empty() {
-        return Err(ApiError::bad_request("label and markdown content are required"));
+    if payload.markdown_content.trim().is_empty() {
+        return Err(ApiError::bad_request("markdown content is required"));
     }
+
+    let existing_entry = variant_collections::find_entry_by_id(&state.pool, entry_id)
+        .await
+        .map_err(|err| ApiError::internal(err.to_string()))?
+        .ok_or_else(|| ApiError::not_found("entry not found"))?;
 
     let entry = variant_collections::update_entry(
         &state.pool,
         entry_id,
-        payload.position,
-        payload.label.trim(),
-        payload.username_hint.as_deref().map(str::trim).filter(|value| !value.is_empty()),
+        existing_entry.position,
+        &existing_entry.label,
+        existing_entry.username_hint.as_deref(),
         &payload.markdown_content,
     )
     .await
@@ -263,12 +277,21 @@ pub async fn delete_entry(
     let user = require_current_user(State(state.clone()), &headers).await?;
     require_admin(&user)?;
 
+    let existing_entry = variant_collections::find_entry_by_id(&state.pool, entry_id)
+        .await
+        .map_err(|err| ApiError::internal(err.to_string()))?
+        .ok_or_else(|| ApiError::not_found("entry not found"))?;
+
     let deleted = variant_collections::delete_entry(&state.pool, entry_id)
         .await
         .map_err(|err| ApiError::internal(err.to_string()))?;
     if !deleted {
         return Err(ApiError::not_found("entry not found"));
     }
+
+    variant_collections::normalize_entries(&state.pool, existing_entry.collection_id)
+        .await
+        .map_err(|err| ApiError::internal(err.to_string()))?;
 
     Ok(Json(serde_json::json!({ "status": "ok" })))
 }

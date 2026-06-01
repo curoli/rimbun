@@ -218,6 +218,33 @@ pub async fn update_entry(
     Ok(record)
 }
 
+pub async fn normalize_entries(pool: &PgPool, collection_id: uuid::Uuid) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"
+        with ordered as (
+          select
+            id,
+            row_number() over (order by position asc, created_at asc) - 1 as normalized_position
+          from variant_entries
+          where collection_id = $1
+        )
+        update variant_entries as entries
+        set
+          position = ordered.normalized_position,
+          label = concat('Variant ', ordered.normalized_position + 1),
+          username_hint = concat('variant_', ordered.normalized_position + 1),
+          updated_at = now()
+        from ordered
+        where entries.id = ordered.id
+        "#,
+    )
+    .bind(collection_id)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
 pub async fn delete_entry(pool: &PgPool, id: uuid::Uuid) -> anyhow::Result<bool> {
     let result = sqlx::query(
         r#"

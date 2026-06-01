@@ -73,6 +73,9 @@ pub struct BlockVariantDto {
     pub alternative_index: usize,
     pub kind: BlockVariantKindDto,
     pub weight: Option<String>,
+    pub reference_text: Option<String>,
+    pub reference_start: Option<usize>,
+    pub reference_end: Option<usize>,
     pub text: String,
     pub source_span: Option<SourceSpanDto>,
 }
@@ -240,98 +243,36 @@ fn map_compare_blocks(
                 .map(|alternative_id| (alternative_id.clone(), comparison))
         })
         .collect::<HashMap<_, _>>();
-    let mut variants_by_block =
-        HashMap::<usize, HashMap<uuid::Uuid, BlockVariantDto>>::new();
-
-    for region in &comparison_set.shared_unchanged_regions {
-        for &block_index in &region.block_indices {
-            for (alternative_id, (alternative_index, alternative)) in &alternative_lookup {
-                let variant = unchanged_variant_for_block(
-                    block_index,
-                    alternative_index + 1,
-                    alternative.submission.id,
-                    comparison_lookup.get(alternative_id).copied(),
-                    alternative_normalized.get(alternative_id),
-                    &comparison_set.reference_blocks,
-                );
-                variants_by_block
-                    .entry(block_index)
-                    .or_default()
-                    .insert(alternative.submission.id, variant);
-            }
-        }
-    }
-
-    for cluster in &comparison_set.variant_clusters {
-        for &block_index in &cluster.block_indices {
-            for variant in &cluster.variants {
-                let Some((alternative_index, alternative)) =
-                    alternative_lookup.get(&variant.alternative_id)
-                else {
-                    continue;
-                };
-                let source_span = alternative_normalized
-                    .get(&variant.alternative_id)
-                    .map(|normalized| source_span_dto(normalized.source_map().span_for_range(
-                        variant.alternative_source_range.clone(),
-                    )));
-                let text = alternative_normalized
-                    .get(&variant.alternative_id)
-                    .and_then(|normalized| {
-                        normalized
-                            .source
-                            .get(variant.alternative_source_range.clone())
-                            .map(ToOwned::to_owned)
-                    })
-                    .unwrap_or_else(|| tokens_to_text(&variant.replacement));
-
-                variants_by_block
-                    .entry(block_index)
-                    .or_default()
-                    .insert(
-                        alternative.submission.id,
-                        BlockVariantDto {
-                            alternative_submission_id: alternative.submission.id,
-                            alternative_index: *alternative_index + 1,
-                            kind: BlockVariantKindDto::Changed,
-                            weight: Some(change_weight_label(variant.weight)),
-                            text,
-                            source_span: source_span,
-                        },
-                    );
-            }
-
-            for alternative_id in &cluster.unchanged_alternatives {
-                let Some((alternative_index, alternative)) =
-                    alternative_lookup.get(alternative_id)
-                else {
-                    continue;
-                };
-                let variant = unchanged_variant_for_block(
-                    block_index,
-                    alternative_index + 1,
-                    alternative.submission.id,
-                    comparison_lookup.get(alternative_id).copied(),
-                    alternative_normalized.get(alternative_id),
-                    &comparison_set.reference_blocks,
-                );
-                variants_by_block
-                    .entry(block_index)
-                    .or_default()
-                    .insert(alternative.submission.id, variant);
-            }
-        }
-    }
-
     comparison_set
         .reference_blocks
         .iter()
         .map(|block| {
-            let mut variants = variants_by_block
-                .remove(&block.index)
-                .unwrap_or_default()
-                .into_values()
-                .collect::<Vec<_>>();
+            let mut variants = Vec::new();
+            for (alternative_id, (alternative_index, alternative)) in &alternative_lookup {
+                let Some(comparison) = comparison_lookup.get(alternative_id).copied() else {
+                    continue;
+                };
+                let changed = changed_variants_for_block(
+                    comparison_set,
+                    comparison,
+                    alternative_normalized.get(alternative_id),
+                    block,
+                    alternative.submission.id,
+                    alternative_index + 1,
+                );
+                if changed.is_empty() {
+                    variants.push(unchanged_variant_for_block(
+                        block.index,
+                        alternative_index + 1,
+                        alternative.submission.id,
+                        Some(comparison),
+                        alternative_normalized.get(alternative_id),
+                        &comparison_set.reference_blocks,
+                    ));
+                } else {
+                    variants.extend(changed);
+                }
+            }
             variants.sort_by_key(|variant| variant.alternative_index);
             CompareBlockDto {
                 block_index: block.index,
@@ -428,20 +369,106 @@ fn unchanged_variant_for_block(
         alternative_index,
         kind: BlockVariantKindDto::Unchanged,
         weight: None,
+        reference_text: None,
+        reference_start: None,
+        reference_end: None,
         text,
         source_span,
     }
 }
 
-fn tokens_to_text(tokens: &[markalign::Token]) -> String {
-    tokens
+fn changed_variants_for_block(
+    comparison_set: &ComparisonSet,
+    comparison: &Comparison,
+    alternative_normalized: Option<&NormalizedDocument>,
+    reference_block: &markalign::ReferenceBlock,
+    alternative_submission_id: uuid::Uuid,
+    alternative_index: usize,
+) -> Vec<BlockVariantDto> {
+    comparison
+        .substitutions
         .iter()
-        .filter_map(|token| match token {
+        .filter(|substitution| {
+            ranges_overlap(
+                &substitution.reference_source_range,
+                &reference_block.source_range,
+            )
+        })
+        .filter_map(|substitution| {
+            let overlap_start = substitution
+                .reference_source_range
+                .start
+                .max(reference_block.source_range.start);
+            let overlap_end = substitution
+                .reference_source_range
+                .end
+                .min(reference_block.source_range.end);
+            if overlap_start >= overlap_end {
+                return None;
+            }
+
+            let reference_text = comparison_set
+                .reference
+                .source
+                .get(overlap_start..overlap_end)
+                .map(ToOwned::to_owned)
+                .filter(|text| !text.is_empty());
+            let replacement_text = tokens_to_text(&substitution.replacement);
+            let source_span = alternative_normalized.map(|normalized| {
+                source_span_dto(
+                    normalized
+                        .source_map()
+                        .span_for_range(substitution.alternative_source_range.clone()),
+                )
+            });
+
+            Some(BlockVariantDto {
+                alternative_submission_id,
+                alternative_index,
+                kind: BlockVariantKindDto::Changed,
+                weight: None,
+                reference_text,
+                reference_start: Some(overlap_start - reference_block.source_range.start),
+                reference_end: Some(overlap_end - reference_block.source_range.start),
+                text: replacement_text,
+                source_span,
+            })
+        })
+        .collect()
+}
+
+fn ranges_overlap(left: &std::ops::Range<usize>, right: &std::ops::Range<usize>) -> bool {
+    left.start < right.end && right.start < left.end
+}
+
+fn tokens_to_text(tokens: &[markalign::Token]) -> String {
+    let mut rendered = String::new();
+
+    for token in tokens {
+        let Some(fragment) = (match token {
             markalign::Token::Text(text) => Some(text.as_str()),
             _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("")
+        }) else {
+            continue;
+        };
+
+        if !rendered.is_empty()
+            && needs_word_separator(
+                rendered.chars().last(),
+                fragment.chars().next(),
+            )
+        {
+            rendered.push(' ');
+        }
+
+        rendered.push_str(fragment);
+    }
+
+    rendered
+}
+
+fn needs_word_separator(left: Option<char>, right: Option<char>) -> bool {
+    matches!((left, right), (Some(left), Some(right)) if left.is_alphanumeric() && right.is_alphanumeric())
 }
 
 async fn compute_section_number(
@@ -497,4 +524,51 @@ async fn compute_section_number(
 
     visit(&by_parent, None, &[], section_id)
         .ok_or_else(|| ApiError::internal("failed to compute section number"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn changed_variants_for_block_extracts_localized_replacements() {
+        let options = Options::default();
+        let main = Document::with_id("main", "Helaragon kommt aus Bandung.");
+        let alt_a = Document::with_id("a", "Indonesiens größte Metalband kommt aus Bandung.");
+        let alt_b = Document::with_id("b", "Burgerkill kommt aus Bandung.");
+        let normalized_a = normalize_document(&alt_a, &options).expect("normalize a");
+        let normalized_b = normalize_document(&alt_b, &options).expect("normalize b");
+        let comparison_set = compare_many(&main, &[alt_a.clone(), alt_b.clone()], &options).expect("compare");
+        let block = comparison_set
+            .reference_blocks
+            .iter()
+            .find(|block| block.kind == BlockKind::Paragraph)
+            .expect("paragraph block");
+        let comparison_a = comparison_set.comparison_by_id("a").expect("comparison a");
+        let comparison_b = comparison_set.comparison_by_id("b").expect("comparison b");
+
+        let variants_a = changed_variants_for_block(
+            &comparison_set,
+            comparison_a,
+            Some(&normalized_a),
+            block,
+            uuid::Uuid::nil(),
+            1,
+        );
+        let variants_b = changed_variants_for_block(
+            &comparison_set,
+            comparison_b,
+            Some(&normalized_b),
+            block,
+            uuid::Uuid::nil(),
+            2,
+        );
+
+        assert_eq!(variants_a.len(), 1);
+        assert_eq!(variants_b.len(), 1);
+        assert_eq!(variants_a[0].reference_text.as_deref(), Some("Helaragon"));
+        assert_eq!(variants_b[0].reference_text.as_deref(), Some("Helaragon"));
+        assert_eq!(variants_a[0].text, "Indonesiens größte Metalband");
+        assert_eq!(variants_b[0].text, "Burgerkill");
+    }
 }

@@ -112,6 +112,9 @@ export type BlockVariantDto = {
   alternative_index: number;
   kind: "unchanged" | "changed";
   weight: string | null;
+  reference_text: string | null;
+  reference_start: number | null;
+  reference_end: number | null;
   text: string;
   source_span: SourceSpanDto | null;
 };
