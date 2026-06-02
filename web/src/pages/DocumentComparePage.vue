@@ -35,6 +35,11 @@ type VariantHighlight = {
   }>;
 };
 
+type ExcerptSegment = {
+  text: string;
+  changed: boolean;
+};
+
 const route = useRoute();
 const router = useRouter();
 const auth = useAuthStore();
@@ -260,6 +265,96 @@ function dedupeHighlightVariants(variants: VariantHighlight["variants"]) {
   });
 }
 
+function variantChangesForSubmission(block: CompareBlockDto, submissionId: string) {
+  return changedVariants(block)
+    .filter(
+      (variant) =>
+        variant.alternative_submission_id === submissionId
+        && variant.reference_start !== null
+        && variant.reference_end !== null,
+    )
+    .map((variant) => ({
+      start: variant.reference_start as number,
+      end: variant.reference_end as number,
+      replacement: variant.text,
+    }))
+    .sort((left, right) => left.start - right.start || left.end - right.end);
+}
+
+function mergeNearbyChanges(
+  changes: Array<{ start: number; end: number; replacement: string }>,
+  gapPadding: number,
+) {
+  if (!changes.length) {
+    return [];
+  }
+
+  const clusters: Array<Array<{ start: number; end: number; replacement: string }>> = [];
+  let currentCluster = [changes[0]];
+
+  for (let index = 1; index < changes.length; index += 1) {
+    const current = changes[index];
+    const previous = currentCluster[currentCluster.length - 1];
+    if (current.start - previous.end <= gapPadding) {
+      currentCluster.push(current);
+    } else {
+      clusters.push(currentCluster);
+      currentCluster = [current];
+    }
+  }
+
+  clusters.push(currentCluster);
+  return clusters;
+}
+
+function variantExcerpt(
+  block: CompareBlockDto,
+  variant: ReturnType<typeof changedVariants>[number],
+  padding = 7,
+) {
+  const currentStart = variant.reference_start ?? 0;
+  const currentEnd = variant.reference_end ?? currentStart;
+  const changes = variantChangesForSubmission(block, variant.alternative_submission_id);
+  const clusters = mergeNearbyChanges(changes, padding);
+  const cluster = clusters.find((candidate) =>
+    candidate.some((change) => change.start === currentStart && change.end === currentEnd),
+  ) ?? [{ start: currentStart, end: currentEnd, replacement: variant.text }];
+
+  const clusterStart = cluster[0].start;
+  const clusterEnd = cluster[cluster.length - 1].end;
+  const excerptStart = Math.max(0, clusterStart - padding);
+  const excerptEnd = Math.min(block.main_text.length, clusterEnd + padding);
+  const segments: ExcerptSegment[] = [];
+  let cursor = excerptStart;
+
+  for (const change of cluster) {
+    if (change.start > cursor) {
+      segments.push({
+        text: block.main_text.slice(cursor, change.start),
+        changed: false,
+      });
+    }
+    segments.push({
+      text: change.replacement,
+      changed: true,
+    });
+    cursor = change.end;
+  }
+
+  if (cursor < excerptEnd) {
+    segments.push({
+      text: block.main_text.slice(cursor, excerptEnd),
+      changed: false,
+    });
+  }
+
+  return {
+    leadingEllipsis: excerptStart > 0,
+    trailingEllipsis: excerptEnd < block.main_text.length,
+    segments,
+  };
+}
+
 async function loadDocument() {
   const id = route.params.id;
   if (typeof id !== "string") {
@@ -441,7 +536,17 @@ onMounted(async () => {
                               </span>
                             </header>
 
-                            <p class="variant-replacement">{{ entry.text }}</p>
+                            <p class="variant-replacement">
+                              <template v-if="variantExcerpt(block, entry.variant).leadingEllipsis">...</template>
+                              <template
+                                v-for="(excerptSegment, excerptIndex) in variantExcerpt(block, entry.variant).segments"
+                                :key="`${segment.highlight.id}-${entry.variant.alternative_submission_id}-${excerptIndex}`"
+                              >
+                                <mark v-if="excerptSegment.changed" class="variant-delta">{{ excerptSegment.text }}</mark>
+                                <template v-else>{{ excerptSegment.text }}</template>
+                              </template>
+                              <template v-if="variantExcerpt(block, entry.variant).trailingEllipsis">...</template>
+                            </p>
                           </article>
                         </aside>
                       </span>
@@ -719,6 +824,13 @@ onMounted(async () => {
   content: "-> ";
   color: #335f28;
   font-weight: 700;
+}
+
+.variant-delta {
+  padding: 0 0.14rem;
+  border-radius: 0.22rem;
+  background: rgba(142, 75, 22, 0.16);
+  color: inherit;
 }
 
 @media (max-width: 960px) {
