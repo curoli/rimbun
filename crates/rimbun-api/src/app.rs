@@ -25,6 +25,11 @@ pub async fn build(config: Config) -> anyhow::Result<Router> {
         )
         .route("/api/users", get(crate::handlers::users::list))
         .route(
+            "/api/site-settings",
+            get(crate::handlers::site_settings::get)
+                .patch(crate::handlers::site_settings::update),
+        )
+        .route(
             "/api/admin/variant-collections",
             get(crate::handlers::admin_variants::list)
                 .post(crate::handlers::admin_variants::create_collection),
@@ -58,7 +63,10 @@ pub async fn build(config: Config) -> anyhow::Result<Router> {
             "/api/documents",
             get(crate::handlers::documents::list).post(crate::handlers::documents::create),
         )
-        .route("/api/documents/{id}", get(crate::handlers::documents::show))
+        .route(
+            "/api/documents/{id}",
+            get(crate::handlers::documents::show).patch(crate::handlers::documents::update),
+        )
         .route(
             "/api/documents/{id}/sections",
             post(crate::handlers::sections::create),

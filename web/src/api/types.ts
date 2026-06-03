@@ -7,6 +7,12 @@ export type User = {
   created_at: string;
 };
 
+export type SiteSettings = {
+  brand_name: string;
+  browser_title: string;
+  updated_at: string;
+};
+
 export type AuthSession = {
   user: User;
   session_token: string;

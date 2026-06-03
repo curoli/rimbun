@@ -5,7 +5,7 @@ import { RouterLink } from "vue-router";
 const props = defineProps<{
   documentId: string;
   canManageOutline?: boolean;
-  activeView: "reader" | "edit" | "outline";
+  activeView: "reader" | "edit" | "outline" | "settings";
   sectionId?: string | null;
 }>();
 
@@ -30,6 +30,13 @@ const editTarget = computed(() => (props.sectionId ? `/sections/${props.sectionI
       :to="`/documents/${documentId}/outline`"
     >
       Outline
+    </RouterLink>
+    <RouterLink
+      v-if="canManageOutline"
+      :class="{ active: activeView === 'settings' }"
+      :to="`/documents/${documentId}/settings`"
+    >
+      Settings
     </RouterLink>
   </nav>
 </template>

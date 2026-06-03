@@ -6,5 +6,6 @@ pub mod drafts;
 pub mod moderation;
 pub mod preferences;
 pub mod sections;
+pub mod site_settings;
 pub mod submissions;
 pub mod users;

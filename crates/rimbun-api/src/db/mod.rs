@@ -6,6 +6,7 @@ pub mod preferences;
 pub mod projections;
 pub mod sections;
 pub mod sessions;
+pub mod site_settings;
 pub mod submissions;
 pub mod test_runs;
 pub mod users;

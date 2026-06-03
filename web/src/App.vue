@@ -3,8 +3,10 @@ import { computed, onMounted, onBeforeUnmount, ref } from "vue";
 import { RouterLink, RouterView, useRoute, useRouter } from "vue-router";
 
 import { useAuthStore } from "./stores/auth";
+import { useSiteStore } from "./stores/site";
 
 const auth = useAuthStore();
+const site = useSiteStore();
 const route = useRoute();
 const router = useRouter();
 const accountMenuOpen = ref(false);
@@ -61,6 +63,7 @@ function handleDocumentClick(event: MouseEvent) {
 
 onMounted(() => {
   void auth.restoreSession();
+  void site.load();
   document.addEventListener("click", handleDocumentClick);
 });
 
@@ -72,7 +75,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="app-shell">
     <header v-if="!isAuthPage" class="topbar">
-      <RouterLink class="brand" to="/">Rimbun</RouterLink>
+      <RouterLink class="brand" to="/">{{ site.brandName }}</RouterLink>
       <div class="topbar-meta">
         <div v-if="auth.user" ref="accountMenuRef" class="account-menu">
           <button class="account-trigger" type="button" @click.stop="toggleAccountMenu">
@@ -93,6 +96,16 @@ onBeforeUnmount(() => {
             <RouterLink class="menu-link" to="/profile" @click="closeAccountMenu">
               Your profile
               <small>View your account details and change display name or password.</small>
+            </RouterLink>
+
+            <RouterLink
+              v-if="canManageAccounts"
+              class="menu-link"
+              to="/admin/site-settings"
+              @click="closeAccountMenu"
+            >
+              Site settings
+              <small>Change the site name and browser title.</small>
             </RouterLink>
 
             <RouterLink
@@ -263,6 +276,8 @@ select {
   right: 0;
   top: calc(100% + 0.55rem);
   min-width: 280px;
+  max-height: calc(100vh - 5rem);
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 0.55rem;

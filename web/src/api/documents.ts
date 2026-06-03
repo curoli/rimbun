@@ -17,6 +17,21 @@ export function getDocument(id: string) {
   return apiRequest<DocumentDetailResponse>(`/api/documents/${id}`);
 }
 
+export function updateDocument(
+  documentId: string,
+  payload: {
+    slug: string;
+    title: string;
+    visibility: "public" | "authenticated";
+    markdown_policy?: Record<string, unknown>;
+  },
+) {
+  return apiRequest<DocumentRecord>(`/api/documents/${documentId}`, {
+    method: "PATCH",
+    bodyJson: payload,
+  });
+}
+
 export function createDocument(payload: {
   slug: string;
   title: string;

@@ -83,6 +83,37 @@ pub async fn find_by_id(pool: &PgPool, id: uuid::Uuid) -> anyhow::Result<Option<
     Ok(record)
 }
 
+pub async fn update(
+    pool: &PgPool,
+    id: uuid::Uuid,
+    slug: &str,
+    title: &str,
+    visibility: &str,
+    markdown_policy: &serde_json::Value,
+) -> anyhow::Result<Option<DocumentRecord>> {
+    let record = sqlx::query_as::<_, DocumentRecord>(
+        r#"
+        update documents
+        set
+          slug = $2,
+          title = $3,
+          visibility = $4,
+          markdown_policy = $5
+        where id = $1
+        returning id, slug, title, visibility, markdown_policy, created_by, created_at
+        "#,
+    )
+    .bind(id)
+    .bind(slug)
+    .bind(title)
+    .bind(visibility)
+    .bind(markdown_policy)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(record)
+}
+
 pub async fn delete_by_id(pool: &PgPool, id: uuid::Uuid) -> anyhow::Result<bool> {
     let result = sqlx::query(
         r#"
