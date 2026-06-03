@@ -62,43 +62,12 @@ onMounted(() => {
 
 <template>
   <main class="documents-page">
-    <section class="hero">
-      <p class="eyebrow">Documents</p>
-      <h1>Browse structured texts and step into competing section versions.</h1>
-      <p class="hero-copy">
-        The current slice shows document discovery, section reading, and publishing drafts against a chosen section.
-      </p>
-    </section>
-
     <section class="documents-panel">
-      <form v-if="canManageDocuments" class="create-form" @submit.prevent="handleCreateDocument">
-        <div class="form-header">
-          <div>
-            <h2>Create Document</h2>
-            <p>Privileged users can create the document shell before sections and content are added.</p>
-          </div>
-          <button class="create-button" :disabled="createState === 'creating'">
-            {{ createState === "creating" ? "Creating..." : "Create document" }}
-          </button>
-        </div>
-        <div class="form-grid">
-          <label>
-            Title
-            <input v-model="createForm.title" placeholder="Bandung Weather Notes" />
-          </label>
-          <label>
-            Slug
-            <input v-model="createForm.slug" placeholder="bandung-weather-notes" />
-          </label>
-          <label>
-            Visibility
-            <select v-model="createForm.visibility">
-              <option value="authenticated">authenticated</option>
-              <option value="public">public</option>
-            </select>
-          </label>
-        </div>
-      </form>
+      <div class="panel-heading">
+        <h1>
+          Documents<span v-if="!isLoading && !error"> ({{ documents.length }})</span>
+        </h1>
+      </div>
 
       <p v-if="isLoading">Loading documents...</p>
       <p v-else-if="error" class="error">{{ error }}</p>
@@ -115,6 +84,52 @@ onMounted(() => {
         </RouterLink>
       </div>
     </section>
+
+    <form v-if="canManageDocuments" class="create-form" @submit.prevent="handleCreateDocument">
+      <div class="form-header">
+        <div>
+          <h2>Create New Document</h2>
+          <p>Admins can create the document shell before sections and content are added.</p>
+        </div>
+        <button class="create-button" :disabled="createState === 'creating'">
+          {{ createState === "creating" ? "Creating..." : "Create document" }}
+        </button>
+      </div>
+      <div class="form-grid">
+        <label>
+          Title
+          <input v-model="createForm.title" placeholder="Bandung Weather Notes" />
+        </label>
+        <label>
+          Slug
+          <input v-model="createForm.slug" placeholder="bandung-weather-notes" />
+        </label>
+        <label>
+          Visibility
+          <select v-model="createForm.visibility">
+            <option value="authenticated">authenticated</option>
+            <option value="public">public</option>
+          </select>
+        </label>
+      </div>
+    </form>
+
+    <details class="about-note">
+      <summary>What is Rimbun?</summary>
+      <div class="about-copy">
+        <p>
+          Rimbun is a collaborative writing system for structured texts where competing published variants stay
+          visible instead of disappearing into revision history.
+        </p>
+        <p>
+          It lets readers browse a document through its current main text while still seeing where alternatives
+          exist and how they differ.
+        </p>
+        <a class="repo-link" href="https://github.com/curoli/rimbun" target="_blank" rel="noreferrer">
+          View the GitHub repository
+        </a>
+      </div>
+    </details>
   </main>
 </template>
 
@@ -126,31 +141,12 @@ onMounted(() => {
   gap: 1.75rem;
 }
 
-.hero {
-  padding: 1.8rem;
-  border-radius: 1.6rem;
-  background: linear-gradient(135deg, rgba(255, 249, 242, 0.98), rgba(239, 219, 194, 0.96));
-  border: 1px solid rgba(35, 24, 15, 0.08);
-}
-
 .eyebrow {
   margin: 0 0 0.5rem;
   color: #8e4b16;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   font-size: 0.82rem;
-}
-
-.hero h1 {
-  margin: 0;
-  max-width: 14ch;
-  font-size: clamp(2rem, 5vw, 3.8rem);
-  line-height: 0.94;
-}
-
-.hero-copy {
-  max-width: 56ch;
-  color: #6b5646;
 }
 
 .documents-panel {
@@ -164,10 +160,10 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 1rem;
-  margin-bottom: 1.5rem;
   padding: 1.2rem;
-  border-radius: 1.15rem;
+  border-radius: 1.35rem;
   background: linear-gradient(180deg, rgba(252, 246, 238, 0.96), rgba(243, 230, 214, 0.94));
+  border: 1px solid rgba(35, 24, 15, 0.08);
 }
 
 .form-header {
@@ -219,6 +215,7 @@ select {
 }
 
 .documents-grid {
+  margin-top: 1rem;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: 1rem;
@@ -252,6 +249,35 @@ select {
 
 .error {
   color: #9d2a16;
+}
+
+.about-note {
+  border-radius: 1rem;
+  background: rgba(255, 252, 247, 0.88);
+  border: 1px solid rgba(35, 24, 15, 0.08);
+  padding: 0.95rem 1.1rem;
+}
+
+.about-note summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: #8e4b16;
+}
+
+.about-copy {
+  margin-top: 0.85rem;
+  max-width: 60ch;
+  color: #5e4a3b;
+}
+
+.about-copy p {
+  margin: 0 0 0.75rem;
+}
+
+.repo-link {
+  color: #8e4b16;
+  text-decoration: underline;
+  text-underline-offset: 0.16em;
 }
 
 @media (max-width: 820px) {
