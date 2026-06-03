@@ -31,6 +31,7 @@ const createCollectionDescription = ref("");
 const collectionName = ref("");
 const collectionDescription = ref("");
 const entryDrafts = ref<Record<string, string>>({});
+const openEntryEditors = ref<Record<string, boolean>>({});
 const newEntryMarkdown = ref("");
 
 const isAdmin = computed(() =>
@@ -55,11 +56,39 @@ function variantLabel(entry: VariantEntryRecord) {
 
 function syncEntryDrafts(collection: VariantCollectionDetail | null) {
   const drafts: Record<string, string> = {};
+  const editors: Record<string, boolean> = {};
   for (const entry of collection?.entries ?? []) {
     drafts[entry.id] = entry.markdown_content;
+    editors[entry.id] = openEntryEditors.value[entry.id] ?? false;
   }
   entryDrafts.value = drafts;
+  openEntryEditors.value = editors;
   newEntryMarkdown.value = "";
+}
+
+function isEntryEditorOpen(entryId: string) {
+  return openEntryEditors.value[entryId] ?? false;
+}
+
+function openEntryEditor(entryId: string) {
+  openEntryEditors.value = {
+    ...openEntryEditors.value,
+    [entryId]: true,
+  };
+}
+
+function closeEntryEditor(entryId: string) {
+  openEntryEditors.value = {
+    ...openEntryEditors.value,
+    [entryId]: false,
+  };
+  const entry = selectedCollection.value?.entries.find((item) => item.id === entryId);
+  if (entry) {
+    entryDrafts.value = {
+      ...entryDrafts.value,
+      [entryId]: entry.markdown_content,
+    };
+  }
 }
 
 async function loadCollections() {
@@ -167,6 +196,7 @@ async function handleUpdateEntry(entryId: string) {
       markdown_content: markdown,
     });
     await loadCollections();
+    closeEntryEditor(entryId);
   } catch (saveError) {
     error.value = saveError instanceof Error ? saveError.message : "Failed to save variant";
   } finally {
@@ -318,26 +348,48 @@ onMounted(async () => {
               <div class="panel-heading">
                 <div class="entry-heading">
                   <h3>{{ variantLabel(entry) }}</h3>
-                  <small>Auto-generated test user and ordering metadata</small>
                 </div>
-                <button
-                  type="button"
-                  class="danger"
-                  :disabled="isSaving"
-                  @click="handleDeleteEntry(entry.id)"
-                >
-                  Delete
-                </button>
+                <div class="action-row">
+                  <button
+                    v-if="!isEntryEditorOpen(entry.id)"
+                    type="button"
+                    class="secondary"
+                    :disabled="isSaving"
+                    @click="openEntryEditor(entry.id)"
+                  >
+                    Edit
+                  </button>
+                  <button
+                    v-if="isEntryEditorOpen(entry.id)"
+                    type="button"
+                    class="secondary"
+                    :disabled="isSaving"
+                    @click="closeEntryEditor(entry.id)"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    class="danger"
+                    :disabled="isSaving"
+                    @click="handleDeleteEntry(entry.id)"
+                  >
+                    Delete
+                  </button>
+                </div>
               </div>
-              <label>
-                <span>Markdown</span>
-                <textarea v-model="entryDrafts[entry.id]" rows="10" />
-              </label>
-              <div class="action-row action-row-end">
-                <button type="button" :disabled="isSaving" @click="handleUpdateEntry(entry.id)">
-                  Save variant
-                </button>
-              </div>
+              <template v-if="isEntryEditorOpen(entry.id)">
+                <label>
+                  <span>Markdown</span>
+                  <textarea v-model="entryDrafts[entry.id]" rows="10" />
+                </label>
+                <div class="action-row action-row-end">
+                  <button type="button" :disabled="isSaving" @click="handleUpdateEntry(entry.id)">
+                    Save variant
+                  </button>
+                </div>
+              </template>
+              <pre v-else class="entry-preview">{{ entry.markdown_content }}</pre>
             </article>
           </div>
 
@@ -546,6 +598,19 @@ label,
 
 .entry-heading small {
   color: #6f5947;
+}
+
+.entry-preview {
+  margin: 0;
+  padding: 0.85rem 0.95rem;
+  border-radius: 0.75rem;
+  background: white;
+  border: 1px solid rgba(35, 24, 15, 0.08);
+  color: #2f241b;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: inherit;
+  line-height: 1.55;
 }
 
 input,
