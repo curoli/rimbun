@@ -7,7 +7,7 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use markalign::{
-    compare_many, normalize_document, BlockAnchor, BlockKind, ChangeWeight, Comparison,
+    compare_many, normalize_document, BlockAnchor, BlockKind, Comparison,
     ComparisonSet, Document, NormalizedDocument, Options, SourceSpan,
 };
 use serde::{Deserialize, Serialize};
@@ -293,14 +293,6 @@ fn map_block_anchor(anchor: &BlockAnchor) -> BlockAnchorDto {
         stable_heading_path: anchor.stable_heading_path.clone(),
         block_key: anchor.block_key.clone(),
         list_item_index: anchor.list_item_index,
-    }
-}
-
-fn change_weight_label(weight: ChangeWeight) -> String {
-    match weight {
-        ChangeWeight::Small => "small".to_owned(),
-        ChangeWeight::Medium => "medium".to_owned(),
-        ChangeWeight::Large => "large".to_owned(),
     }
 }
 

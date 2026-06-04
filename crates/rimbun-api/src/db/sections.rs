@@ -9,13 +9,13 @@ fn normalized_order<T: Copy + PartialEq>(
 ) -> Vec<T> {
     let mut items = items;
 
-    if let Some(moved_item) = moved_item {
-        if let Some(index) = items.iter().position(|item| *item == moved_item) {
-            let moved = items.remove(index);
-            let requested = target_position.unwrap_or(items.len() as i32).max(0) as usize;
-            let insert_at = requested.min(items.len());
-            items.insert(insert_at, moved);
-        }
+    if let Some(moved_item) = moved_item
+        && let Some(index) = items.iter().position(|item| *item == moved_item)
+    {
+        let moved = items.remove(index);
+        let requested = target_position.unwrap_or(items.len() as i32).max(0) as usize;
+        let insert_at = requested.min(items.len());
+        items.insert(insert_at, moved);
     }
 
     items
