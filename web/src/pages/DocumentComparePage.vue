@@ -45,7 +45,7 @@ const router = useRouter();
 const auth = useAuthStore();
 
 const documentData = ref<DocumentDetailResponse | null>(null);
-const sectionCompares = ref<Record<string, SectionCompareDto>>({});
+const sectionCompares = ref<Record<string, SectionCompareDto | null>>({});
 const selectedSectionId = ref<string | null>(null);
 const openVariantKey = ref<string | null>(null);
 const dismissedVariantKey = ref<string | null>(null);
@@ -385,7 +385,13 @@ async function loadSectionCompares(sectionIds: string[]) {
   isLoadingCompares.value = true;
   try {
     const entries = await Promise.all(
-      sectionIds.map(async (sectionId) => [sectionId, await getSectionCompare(sectionId)] as const),
+      sectionIds.map(async (sectionId) => {
+        const section = documentData.value?.sections.find((item) => item.id === sectionId) ?? null;
+        if (!section?.has_own_text) {
+          return [sectionId, null] as const;
+        }
+        return [sectionId, await getSectionCompare(sectionId)] as const;
+      }),
     );
     sectionCompares.value = Object.fromEntries(entries);
   } finally {
@@ -554,7 +560,7 @@ onMounted(async () => {
                   </p>
                 </section>
               </div>
-              <p v-else class="empty-note">No published version yet.</p>
+              <p v-else-if="item.section.has_own_text" class="empty-note">No published version yet.</p>
             </article>
           </div>
         </section>

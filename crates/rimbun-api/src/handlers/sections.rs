@@ -16,12 +16,14 @@ use crate::{
 pub struct CreateSectionRequest {
     pub parent_id: Option<uuid::Uuid>,
     pub title: String,
+    pub has_own_text: bool,
     pub position: i32,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateSectionRequest {
     pub title: String,
+    pub has_own_text: bool,
     pub position: i32,
     pub parent_id: Option<uuid::Uuid>,
 }
@@ -78,6 +80,7 @@ pub async fn create(
             document_id,
             parent_id: payload.parent_id,
             title: payload.title.trim().to_owned(),
+            has_own_text: payload.has_own_text,
             position: payload.position,
             path,
         },
@@ -154,6 +157,7 @@ pub async fn update(
         &state.pool,
         id,
         payload.title.trim(),
+        payload.has_own_text,
         payload.parent_id,
         payload.position,
     )

@@ -26,10 +26,16 @@ pub async fn save(
 ) -> Result<Json<drafts::DraftRecord>, ApiError> {
     let user = require_current_user(State(state.clone()), &headers).await?;
 
-    let _section = sections::find_by_id(&state.pool, section_id)
+    let section = sections::find_by_id(&state.pool, section_id)
         .await
         .map_err(|err| ApiError::internal(err.to_string()))?
         .ok_or_else(|| ApiError::not_found("section not found"))?;
+
+    if !section.has_own_text {
+        return Err(ApiError::bad_request(
+            "this section has no own text and cannot store drafts",
+        ));
+    }
 
     let draft = drafts::upsert(
         &state.pool,

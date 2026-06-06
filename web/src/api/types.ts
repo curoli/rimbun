@@ -33,6 +33,7 @@ export type SectionRecord = {
   document_id: string;
   parent_id: string | null;
   title: string;
+  has_own_text: boolean;
   position: number;
   path: string;
   created_at: string;

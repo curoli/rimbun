@@ -199,6 +199,7 @@ onMounted(async () => {
         <SectionEditor
           :title="selectedSection.title"
           :content="draftContent"
+          :has-own-text="selectedSection.has_own_text"
           :save-state="saveState"
           :publish-state="publishState"
           :error="error"
@@ -221,11 +222,13 @@ onMounted(async () => {
         />
 
         <SubmissionList
+          v-if="selectedSection.has_own_text"
           :submissions="sectionView.active_submissions"
           :projection="sectionView.projection"
           :preferred-base-submission-id="sectionView.preferred_base_submission_id"
           @set-base="handleSetBase"
         />
+        <p v-else class="empty-note">This section has no own text. Only its subsections contribute content.</p>
       </div>
     </template>
   </main>
@@ -242,6 +245,15 @@ onMounted(async () => {
 
 .error {
   color: #9d2a16;
+}
+
+.empty-note {
+  margin: 0;
+  padding: 1rem 1.05rem;
+  border-radius: 1rem;
+  background: rgba(255, 252, 247, 0.94);
+  color: #5e4a3b;
+  box-shadow: inset 0 0 0 1px rgba(35, 24, 15, 0.08);
 }
 
 .section-number {

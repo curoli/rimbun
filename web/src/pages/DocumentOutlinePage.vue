@@ -22,6 +22,7 @@ const createSectionError = ref<string | null>(null);
 const updateSectionError = ref<string | null>(null);
 const createSectionTitle = ref("");
 const editSectionTitle = ref("");
+const editSectionHasOwnText = ref(true);
 const editSectionParentId = ref<string>("root");
 const editSectionPosition = ref(0);
 
@@ -71,12 +72,14 @@ const canDemote = computed(() => selectedSiblingIndex.value > 0);
 function syncSectionForm() {
   if (!selectedSection.value) {
     editSectionTitle.value = "";
+    editSectionHasOwnText.value = true;
     editSectionPosition.value = 0;
     editSectionParentId.value = "root";
     return;
   }
 
   editSectionTitle.value = selectedSection.value.title;
+  editSectionHasOwnText.value = selectedSection.value.has_own_text;
   editSectionParentId.value = selectedSection.value.parent_id ?? "root";
   editSectionPosition.value = selectedSection.value.position;
 }
@@ -121,6 +124,7 @@ async function handleCreateSection() {
     const created = await createSection(documentData.value.document.id, {
       parent_id: selectedSectionId.value,
       title: createSectionTitle.value,
+      has_own_text: true,
       position: siblings.length,
     });
     createSectionTitle.value = "";
@@ -144,6 +148,7 @@ async function handleUpdateSection() {
   try {
     await updateSection(selectedSection.value.id, {
       title: editSectionTitle.value,
+      has_own_text: editSectionHasOwnText.value,
       parent_id: editSectionParentId.value === "root" ? null : editSectionParentId.value,
       position: editSectionPosition.value,
     });
@@ -168,6 +173,7 @@ async function applyStructureUpdate(parentId: string | null, position: number) {
   try {
     await updateSection(selectedSection.value.id, {
       title: editSectionTitle.value,
+      has_own_text: editSectionHasOwnText.value,
       parent_id: parentId,
       position,
     });
@@ -333,6 +339,13 @@ onMounted(async () => {
                 Title
                 <input v-model="editSectionTitle" placeholder="Section title" />
               </label>
+              <div class="checkbox-row">
+                <span>Content</span>
+                <label class="checkbox-inline">
+                  <input v-model="editSectionHasOwnText" type="checkbox" />
+                  <span>This section has its own text</span>
+                </label>
+              </div>
               <label>
                 Parent
                 <select v-model="editSectionParentId">
@@ -445,6 +458,29 @@ onMounted(async () => {
   flex-direction: column;
   gap: 0.35rem;
   color: #6f5947;
+}
+
+.checkbox-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  color: #6f5947;
+}
+
+.checkbox-inline {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-height: 3rem;
+  padding: 0.85rem 0.95rem;
+  border-radius: 0.95rem;
+  background: white;
+  box-shadow: inset 0 0 0 1px rgba(35, 24, 15, 0.08);
+  color: #2d1d12;
+}
+
+.checkbox-inline input {
+  margin: 0;
 }
 
 .error {

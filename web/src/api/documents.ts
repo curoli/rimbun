@@ -49,6 +49,7 @@ export function createSection(
   payload: {
     parent_id: string | null;
     title: string;
+    has_own_text: boolean;
     position: number;
   },
 ) {
@@ -62,6 +63,7 @@ export function updateSection(
   sectionId: string,
   payload: {
     title: string;
+    has_own_text: boolean;
     parent_id: string | null;
     position: number;
   },

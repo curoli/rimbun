@@ -2,6 +2,7 @@
 defineProps<{
   title: string;
   content: string;
+  hasOwnText: boolean;
   saveState: string;
   publishState: string;
   error: string | null;
@@ -24,7 +25,7 @@ const emit = defineEmits<{
         <p class="eyebrow">Draft Editor</p>
         <h2>{{ title }}</h2>
       </div>
-      <div class="editor-actions">
+      <div v-if="hasOwnText" class="editor-actions">
         <button class="ghost" :disabled="!canEdit || saveState === 'saving'" @click="emit('save')">
           {{ saveState === "saving" ? "Saving..." : "Save Draft" }}
         </button>
@@ -33,7 +34,7 @@ const emit = defineEmits<{
         </button>
       </div>
     </div>
-    <div class="editor-status-grid">
+    <div v-if="hasOwnText" class="editor-status-grid">
       <div class="status-card">
         <span>Global Main Version</span>
         <strong>{{ globalMainLabel }}</strong>
@@ -44,7 +45,11 @@ const emit = defineEmits<{
       </div>
     </div>
     <p v-if="error" class="error">{{ error }}</p>
+    <p v-if="!hasOwnText" class="structure-note">
+      This section is configured as structure-only. Its content comes only from its subsections.
+    </p>
     <textarea
+      v-else
       :value="content"
       :disabled="!canEdit"
       placeholder="Write the section content in Markdown."
@@ -164,6 +169,15 @@ textarea {
 .error {
   margin: 0;
   color: #9d2a16;
+}
+
+.structure-note {
+  margin: 0;
+  padding: 1rem 1.05rem;
+  border-radius: 1rem;
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: inset 0 0 0 1px rgba(35, 24, 15, 0.08);
+  color: #5e4a3b;
 }
 
 @media (max-width: 760px) {

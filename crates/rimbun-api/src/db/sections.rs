@@ -33,6 +33,7 @@ pub struct SectionRecord {
     pub document_id: uuid::Uuid,
     pub parent_id: Option<uuid::Uuid>,
     pub title: String,
+    pub has_own_text: bool,
     pub position: i32,
     pub path: String,
     pub created_at: DateTime<Utc>,
@@ -44,6 +45,7 @@ pub struct NewSection {
     pub document_id: uuid::Uuid,
     pub parent_id: Option<uuid::Uuid>,
     pub title: String,
+    pub has_own_text: bool,
     pub position: i32,
     pub path: String,
 }
@@ -51,15 +53,16 @@ pub struct NewSection {
 pub async fn create(pool: &PgPool, section: &NewSection) -> anyhow::Result<SectionRecord> {
     let record = sqlx::query_as::<_, SectionRecord>(
         r#"
-        insert into sections (id, document_id, parent_id, title, position, path)
-        values ($1, $2, $3, $4, $5, $6)
-        returning id, document_id, parent_id, title, position, path, created_at
+        insert into sections (id, document_id, parent_id, title, has_own_text, position, path)
+        values ($1, $2, $3, $4, $5, $6, $7)
+        returning id, document_id, parent_id, title, has_own_text, position, path, created_at
         "#,
     )
     .bind(section.id)
     .bind(section.document_id)
     .bind(section.parent_id)
     .bind(&section.title)
+    .bind(section.has_own_text)
     .bind(section.position)
     .bind(&section.path)
     .fetch_one(pool)
@@ -74,7 +77,7 @@ pub async fn list_by_document(
 ) -> anyhow::Result<Vec<SectionRecord>> {
     let records = sqlx::query_as::<_, SectionRecord>(
         r#"
-        select id, document_id, parent_id, title, position, path, created_at
+        select id, document_id, parent_id, title, has_own_text, position, path, created_at
         from sections
         where document_id = $1
         order by path asc, position asc, created_at asc
@@ -93,7 +96,7 @@ pub async fn find_by_id(
 ) -> anyhow::Result<Option<SectionRecord>> {
     let record = sqlx::query_as::<_, SectionRecord>(
         r#"
-        select id, document_id, parent_id, title, position, path, created_at
+        select id, document_id, parent_id, title, has_own_text, position, path, created_at
         from sections
         where id = $1
         "#,
@@ -109,18 +112,20 @@ pub async fn update_title_position(
     pool: &PgPool,
     section_id: uuid::Uuid,
     title: &str,
+    has_own_text: bool,
     position: i32,
 ) -> anyhow::Result<Option<SectionRecord>> {
     let record = sqlx::query_as::<_, SectionRecord>(
         r#"
         update sections
-        set title = $2, position = $3
+        set title = $2, has_own_text = $3, position = $4
         where id = $1
-        returning id, document_id, parent_id, title, position, path, created_at
+        returning id, document_id, parent_id, title, has_own_text, position, path, created_at
         "#,
     )
     .bind(section_id)
     .bind(title)
+    .bind(has_own_text)
     .bind(position)
     .fetch_optional(pool)
     .await?;
@@ -135,7 +140,7 @@ async fn list_group_sections(
 ) -> anyhow::Result<Vec<SectionRecord>> {
     let records = sqlx::query_as::<_, SectionRecord>(
         r#"
-        select id, document_id, parent_id, title, position, path, created_at
+        select id, document_id, parent_id, title, has_own_text, position, path, created_at
         from sections
         where document_id = $1
           and parent_id is not distinct from $2
@@ -201,6 +206,7 @@ pub async fn move_section(
     pool: &PgPool,
     section_id: uuid::Uuid,
     title: &str,
+    has_own_text: bool,
     parent_id: Option<uuid::Uuid>,
     position: i32,
 ) -> anyhow::Result<Option<SectionRecord>> {
@@ -208,7 +214,7 @@ pub async fn move_section(
 
     let current = sqlx::query_as::<_, SectionRecord>(
         r#"
-        select id, document_id, parent_id, title, position, path, created_at
+        select id, document_id, parent_id, title, has_own_text, position, path, created_at
         from sections
         where id = $1
         "#,
@@ -227,7 +233,7 @@ pub async fn move_section(
     let new_path = if let Some(parent_id) = parent_id {
         let parent = sqlx::query_as::<_, SectionRecord>(
             r#"
-            select id, document_id, parent_id, title, position, path, created_at
+            select id, document_id, parent_id, title, has_own_text, position, path, created_at
             from sections
             where id = $1
             "#,
@@ -248,13 +254,14 @@ pub async fn move_section(
     sqlx::query_as::<_, SectionRecord>(
         r#"
         update sections
-        set title = $2, parent_id = $3, position = $4, path = $5
+        set title = $2, has_own_text = $3, parent_id = $4, position = $5, path = $6
         where id = $1
-        returning id, document_id, parent_id, title, position, path, created_at
+        returning id, document_id, parent_id, title, has_own_text, position, path, created_at
         "#,
     )
     .bind(section_id)
     .bind(title)
+    .bind(has_own_text)
     .bind(parent_id)
     .bind(temporary_position)
     .bind(&new_path)
@@ -300,7 +307,7 @@ pub async fn move_section(
 
     let record = sqlx::query_as::<_, SectionRecord>(
         r#"
-        select id, document_id, parent_id, title, position, path, created_at
+        select id, document_id, parent_id, title, has_own_text, position, path, created_at
         from sections
         where id = $1
         "#,
