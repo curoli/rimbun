@@ -20,6 +20,7 @@ const form = reactive({
   title: "",
   slug: "",
   visibility: "authenticated" as "public" | "authenticated",
+  paginationLevel: "none",
 });
 
 const canManageDocument = computed(() =>
@@ -31,12 +32,18 @@ function syncForm() {
     form.title = "";
     form.slug = "";
     form.visibility = "authenticated";
+    form.paginationLevel = "none";
     return;
   }
 
   form.title = documentData.value.document.title;
   form.slug = documentData.value.document.slug;
   form.visibility = documentData.value.document.visibility as "public" | "authenticated";
+  const rawPaginationLevel = documentData.value.document.markdown_policy?.pagination_level;
+  form.paginationLevel =
+    typeof rawPaginationLevel === "number" && rawPaginationLevel > 0
+      ? String(rawPaginationLevel)
+      : "none";
 }
 
 async function loadDocument() {
@@ -73,7 +80,10 @@ async function handleSave() {
       title: form.title,
       slug: form.slug,
       visibility: form.visibility,
-      markdown_policy: documentData.value.document.markdown_policy,
+      markdown_policy: {
+        ...documentData.value.document.markdown_policy,
+        pagination_level: form.paginationLevel === "none" ? null : Number(form.paginationLevel),
+      },
     });
     documentData.value = {
       ...documentData.value,
@@ -128,7 +138,7 @@ onMounted(async () => {
         <div class="panel-heading">
           <div>
             <h2>Document Settings</h2>
-            <p>Update the document title, slug, and visibility.</p>
+            <p>Update the document title, slug, visibility, and reader pagination.</p>
           </div>
           <button type="button" :disabled="saveState === 'saving'" @click="handleSave">
             {{ saveState === "saving" ? "Saving..." : "Save settings" }}
@@ -151,6 +161,16 @@ onMounted(async () => {
             <select v-model="form.visibility">
               <option value="authenticated">authenticated</option>
               <option value="public">public</option>
+            </select>
+          </label>
+          <label>
+            Pagination level
+            <select v-model="form.paginationLevel">
+              <option value="none">No pagination</option>
+              <option value="1">Level 1 sections</option>
+              <option value="2">Level 2 sections</option>
+              <option value="3">Level 3 sections</option>
+              <option value="4">Level 4 sections</option>
             </select>
           </label>
         </div>
@@ -191,7 +211,7 @@ onMounted(async () => {
 
 .form-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0.9rem;
 }
 

@@ -23,6 +23,13 @@ type SectionCompareItem = {
   submissions: SubmissionSummaryDto[];
 };
 
+type ReaderPage = {
+  id: string;
+  title: string;
+  sectionIds: string[];
+  sections: SectionCompareItem[];
+};
+
 type VariantHighlight = {
   id: string;
   sourceText: string;
@@ -47,6 +54,7 @@ const auth = useAuthStore();
 const documentData = ref<DocumentDetailResponse | null>(null);
 const sectionCompares = ref<Record<string, SectionCompareDto | null>>({});
 const selectedSectionId = ref<string | null>(null);
+const currentPageIndex = ref(0);
 const openVariantKey = ref<string | null>(null);
 const dismissedVariantKey = ref<string | null>(null);
 const isLoadingDocument = ref(true);
@@ -96,6 +104,85 @@ const compareSections = computed<SectionCompareItem[]>(() =>
     };
   }),
 );
+
+const paginationLevel = computed(() => {
+  const rawLevel = documentData.value?.document.markdown_policy?.pagination_level;
+  return typeof rawLevel === "number" && rawLevel > 0 ? rawLevel : null;
+});
+
+function sectionLevel(section: SectionRecord) {
+  return section.path.split("/").length;
+}
+
+const readerPages = computed<ReaderPage[]>(() => {
+  const items = compareSections.value;
+  const level = paginationLevel.value;
+  if (!items.length) {
+    return [];
+  }
+
+  if (!level) {
+    return [
+      {
+        id: "all",
+        title: documentData.value?.document.title ?? "Document",
+        sectionIds: items.map((item) => item.section.id),
+        sections: items,
+      },
+    ];
+  }
+
+  const pages: ReaderPage[] = [];
+  let pendingPrefix: SectionCompareItem[] = [];
+  let currentPage: ReaderPage | null = null;
+
+  for (const item of items) {
+    const currentLevel = sectionLevel(item.section);
+    if (currentLevel === level) {
+      if (currentPage) {
+        pages.push(currentPage);
+      }
+      currentPage = {
+        id: item.section.id,
+        title: item.section.has_heading
+          ? `${item.number} ${item.section.title}`.trim()
+          : item.number || "Untitled page",
+        sectionIds: [...pendingPrefix.map((entry) => entry.section.id), item.section.id],
+        sections: [...pendingPrefix, item],
+      };
+      pendingPrefix = [];
+      continue;
+    }
+
+    if (currentPage && currentLevel > level) {
+      currentPage.sections.push(item);
+      currentPage.sectionIds.push(item.section.id);
+      continue;
+    }
+
+    pendingPrefix.push(item);
+  }
+
+  if (currentPage) {
+    pages.push(currentPage);
+  }
+
+  if (!pages.length) {
+    return [
+      {
+        id: "all",
+        title: documentData.value?.document.title ?? "Document",
+        sectionIds: items.map((item) => item.section.id),
+        sections: items,
+      },
+    ];
+  }
+
+  return pages;
+});
+
+const currentPage = computed(() => readerPages.value[currentPageIndex.value] ?? null);
+const visibleCompareSections = computed(() => currentPage.value?.sections ?? compareSections.value);
 
 function submissionLabel(submission: SubmissionSummaryDto) {
   return `${submission.display_name} @${submission.username} • ${new Date(submission.published_at).toLocaleString()}`;
@@ -375,6 +462,7 @@ async function loadDocument() {
         ? selectedSectionId.value
         : data.sections[0]?.id ?? null;
     await loadSectionCompares(data.sections.map((section) => section.id));
+    currentPageIndex.value = 0;
   } catch (loadError) {
     error.value = loadError instanceof Error ? loadError.message : "Failed to load document";
     if (error.value.toLowerCase().includes("authentication required")) {
@@ -405,8 +493,24 @@ async function loadSectionCompares(sectionIds: string[]) {
 
 async function handleSelectSection(sectionId: string) {
   selectedSectionId.value = sectionId;
+  const pageIndex = readerPages.value.findIndex((page) => page.sectionIds.includes(sectionId));
+  if (pageIndex >= 0) {
+    currentPageIndex.value = pageIndex;
+  }
   await nextTick();
   document.getElementById(`compare-section-${sectionId}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function setCurrentPage(index: number) {
+  if (index < 0 || index >= readerPages.value.length) {
+    return;
+  }
+
+  currentPageIndex.value = index;
+  const firstSectionId = readerPages.value[index]?.sectionIds[0] ?? null;
+  if (firstSectionId) {
+    selectedSectionId.value = firstSectionId;
+  }
 }
 
 watch(
@@ -420,6 +524,32 @@ watch(
 onMounted(async () => {
   await auth.restoreSession();
   await loadDocument();
+});
+
+watch(readerPages, (pages) => {
+  if (!pages.length) {
+    currentPageIndex.value = 0;
+    return;
+  }
+
+  if (currentPageIndex.value >= pages.length) {
+    currentPageIndex.value = pages.length - 1;
+  }
+
+  if (selectedSectionId.value && pages[currentPageIndex.value]?.sectionIds.includes(selectedSectionId.value)) {
+    return;
+  }
+
+  const pageIndex = selectedSectionId.value
+    ? pages.findIndex((page) => page.sectionIds.includes(selectedSectionId.value as string))
+    : -1;
+
+  if (pageIndex >= 0) {
+    currentPageIndex.value = pageIndex;
+    return;
+  }
+
+  selectedSectionId.value = pages[currentPageIndex.value]?.sectionIds[0] ?? null;
 });
 </script>
 
@@ -454,8 +584,32 @@ onMounted(async () => {
         <section class="compare-panel">
           <p v-if="isLoadingCompares">Loading document text...</p>
           <div v-else class="compare-sections">
+            <nav v-if="readerPages.length > 1" class="page-nav">
+              <button type="button" :disabled="currentPageIndex === 0" @click="setCurrentPage(currentPageIndex - 1)">
+                Previous page
+              </button>
+              <div class="page-pills">
+                <button
+                  v-for="(page, pageIndex) in readerPages"
+                  :key="page.id"
+                  type="button"
+                  class="page-pill"
+                  :class="{ active: pageIndex === currentPageIndex }"
+                  @click="setCurrentPage(pageIndex)"
+                >
+                  {{ page.title }}
+                </button>
+              </div>
+              <button
+                type="button"
+                :disabled="currentPageIndex >= readerPages.length - 1"
+                @click="setCurrentPage(currentPageIndex + 1)"
+              >
+                Next page
+              </button>
+            </nav>
             <article
-              v-for="item in compareSections"
+              v-for="item in visibleCompareSections"
               :id="`compare-section-${item.section.id}`"
               :key="item.section.id"
               class="compare-section"
@@ -611,6 +765,52 @@ onMounted(async () => {
 
 .compare-sections {
   gap: 1rem;
+}
+
+.page-nav {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.85rem;
+  align-items: center;
+  padding-bottom: 0.25rem;
+  border-bottom: 1px solid rgba(35, 24, 15, 0.08);
+}
+
+.page-nav > button,
+.page-pill {
+  border: 0;
+  border-radius: 999px;
+  padding: 0.7rem 0.95rem;
+  cursor: pointer;
+  font: inherit;
+}
+
+.page-nav > button {
+  background: #efe4d6;
+  color: #4d3322;
+}
+
+.page-nav > button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.page-pills {
+  display: flex;
+  gap: 0.6rem;
+  overflow-x: auto;
+  padding-bottom: 0.2rem;
+}
+
+.page-pill {
+  background: rgba(255, 255, 255, 0.72);
+  color: #4d3322;
+  white-space: nowrap;
+}
+
+.page-pill.active {
+  background: #8e4b16;
+  color: white;
 }
 
 .compare-section {
@@ -844,6 +1044,10 @@ onMounted(async () => {
 }
 
 @media (max-width: 960px) {
+  .page-nav {
+    grid-template-columns: 1fr;
+  }
+
   .compare-panel-header,
   .compare-section-header,
   .variant-header {

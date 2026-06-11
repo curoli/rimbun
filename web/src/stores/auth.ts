@@ -20,6 +20,7 @@ type AuthState = {
   isLoading: boolean;
   error: string | null;
   hydrated: boolean;
+  sessionChecked: boolean;
 };
 
 function isUser(value: unknown): value is User {
@@ -118,6 +119,7 @@ export const useAuthStore = defineStore("auth", {
     isLoading: false,
     error: null,
     hydrated: false,
+    sessionChecked: false,
   }),
   actions: {
     hydrateFromStorage() {
@@ -169,7 +171,7 @@ export const useAuthStore = defineStore("auth", {
     },
     async restoreSession() {
       this.hydrateFromStorage();
-      if (this.user || this.isLoading) {
+      if (this.isLoading || this.sessionChecked) {
         return;
       }
 
@@ -177,9 +179,21 @@ export const useAuthStore = defineStore("auth", {
       this.error = null;
       try {
         setActiveSessionToken(this.activeSessionToken);
-        this.user = await authApi.me();
-        if (this.activeSessionToken && this.user) {
-          this.updateCurrentUser(this.user);
+        try {
+          this.user = await authApi.me();
+          if (this.activeSessionToken && this.user) {
+            this.updateCurrentUser(this.user);
+          }
+        } catch (error) {
+          if (error instanceof ApiError && error.status === 401 && this.activeSessionToken) {
+            const staleSessionToken = this.activeSessionToken;
+            this.removeAccount(staleSessionToken);
+            this.activeSessionToken = null;
+            setActiveSessionToken(null);
+            this.user = await authApi.me();
+          } else {
+            throw error;
+          }
         }
       } catch (error) {
         if (!(error instanceof ApiError) || error.status !== 401) {
@@ -191,6 +205,7 @@ export const useAuthStore = defineStore("auth", {
         setActiveSessionToken(null);
         this.user = null;
       } finally {
+        this.sessionChecked = true;
         this.isLoading = false;
       }
     },
@@ -201,6 +216,7 @@ export const useAuthStore = defineStore("auth", {
       try {
         const authSession = await authApi.login(payload);
         this.storeAccount(authSession);
+        this.sessionChecked = true;
       } catch (error) {
         this.error = error instanceof Error ? error.message : "Login failed";
         throw error;
@@ -215,6 +231,7 @@ export const useAuthStore = defineStore("auth", {
       try {
         const authSession = await authApi.register(payload);
         this.storeAccount(authSession);
+        this.sessionChecked = true;
       } catch (error) {
         this.error = error instanceof Error ? error.message : "Registration failed";
         throw error;
@@ -231,6 +248,7 @@ export const useAuthStore = defineStore("auth", {
         setActiveSessionToken(sessionToken);
         const user = await authApi.me();
         this.updateCurrentUser(user);
+        this.sessionChecked = true;
       } catch (error) {
         this.removeAccount(sessionToken);
         setActiveSessionToken(this.activeSessionToken);
@@ -262,6 +280,7 @@ export const useAuthStore = defineStore("auth", {
           setActiveSessionToken(null);
           persistAccounts(this.availableAccounts, this.activeSessionToken);
         }
+        this.sessionChecked = true;
       } catch (error) {
         this.error = error instanceof Error ? error.message : "Logout failed";
         throw error;
