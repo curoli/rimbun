@@ -117,6 +117,10 @@ function blockLabel(block: CompareBlockDto) {
   return block.block_kind.replaceAll("_", " ");
 }
 
+function sectionDisplayTitle(section: SectionRecord) {
+  return section.has_heading ? section.title : "";
+}
+
 function inlineDiff(block: CompareBlockDto, alternativeText: string) {
   return buildInlineDiff(block.main_text, alternativeText);
 }
@@ -459,9 +463,9 @@ onMounted(async () => {
             >
               <header class="compare-section-header">
                 <div class="section-heading">
-                  <h3>
+                  <h3 v-if="item.section.has_heading">
                     <span class="section-number">{{ item.number }}</span>
-                    {{ item.section.title }}
+                    {{ sectionDisplayTitle(item.section) }}
                   </h3>
                   <div class="section-meta">
                     <span v-if="item.compare">

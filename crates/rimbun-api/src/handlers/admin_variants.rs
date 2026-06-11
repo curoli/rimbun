@@ -350,6 +350,7 @@ pub async fn run_collection(
             document_id: document.id,
             parent_id: None,
             title: collection.name.clone(),
+            has_heading: true,
             has_own_text: true,
             position: 0,
             path: section_id.to_string(),

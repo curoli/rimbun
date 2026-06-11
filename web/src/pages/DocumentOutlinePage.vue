@@ -21,7 +21,10 @@ const error = ref<string | null>(null);
 const createSectionError = ref<string | null>(null);
 const updateSectionError = ref<string | null>(null);
 const createSectionTitle = ref("");
+const createSectionHasHeading = ref(true);
+const createUnnamedSectionCount = ref(1);
 const editSectionTitle = ref("");
+const editSectionHasHeading = ref(true);
 const editSectionHasOwnText = ref(true);
 const editSectionParentId = ref<string>("root");
 const editSectionPosition = ref(0);
@@ -72,6 +75,7 @@ const canDemote = computed(() => selectedSiblingIndex.value > 0);
 function syncSectionForm() {
   if (!selectedSection.value) {
     editSectionTitle.value = "";
+    editSectionHasHeading.value = true;
     editSectionHasOwnText.value = true;
     editSectionPosition.value = 0;
     editSectionParentId.value = "root";
@@ -79,6 +83,7 @@ function syncSectionForm() {
   }
 
   editSectionTitle.value = selectedSection.value.title;
+  editSectionHasHeading.value = selectedSection.value.has_heading;
   editSectionHasOwnText.value = selectedSection.value.has_own_text;
   editSectionParentId.value = selectedSection.value.parent_id ?? "root";
   editSectionPosition.value = selectedSection.value.position;
@@ -123,16 +128,54 @@ async function handleCreateSection() {
     );
     const created = await createSection(documentData.value.document.id, {
       parent_id: selectedSectionId.value,
-      title: createSectionTitle.value,
+      title: createSectionHasHeading.value ? createSectionTitle.value : "",
+      has_heading: createSectionHasHeading.value,
       has_own_text: true,
       position: siblings.length,
     });
     createSectionTitle.value = "";
+    createSectionHasHeading.value = true;
     await loadDocument();
     selectedSectionId.value = created.id;
   } catch (createError) {
     createSectionError.value =
       createError instanceof Error ? createError.message : "Failed to create section";
+  } finally {
+    createSectionState.value = "idle";
+  }
+}
+
+async function handleCreateUnnamedSections() {
+  if (!documentData.value) {
+    return;
+  }
+
+  createSectionState.value = "creating";
+  createSectionError.value = null;
+  try {
+    const parentId = selectedSectionId.value ?? null;
+    let nextPosition = documentData.value.sections.filter((section) => section.parent_id === parentId).length;
+    let lastCreatedId: string | null = null;
+
+    for (let index = 0; index < createUnnamedSectionCount.value; index += 1) {
+      const created = await createSection(documentData.value.document.id, {
+        parent_id: parentId,
+        title: "",
+        has_heading: false,
+        has_own_text: true,
+        position: nextPosition,
+      });
+      nextPosition += 1;
+      lastCreatedId = created.id;
+    }
+
+    await loadDocument();
+    if (lastCreatedId) {
+      selectedSectionId.value = lastCreatedId;
+    }
+  } catch (createError) {
+    createSectionError.value =
+      createError instanceof Error ? createError.message : "Failed to create unnamed sections";
   } finally {
     createSectionState.value = "idle";
   }
@@ -147,7 +190,8 @@ async function handleUpdateSection() {
   updateSectionError.value = null;
   try {
     await updateSection(selectedSection.value.id, {
-      title: editSectionTitle.value,
+      title: editSectionHasHeading.value ? editSectionTitle.value : "",
+      has_heading: editSectionHasHeading.value,
       has_own_text: editSectionHasOwnText.value,
       parent_id: editSectionParentId.value === "root" ? null : editSectionParentId.value,
       position: editSectionPosition.value,
@@ -172,7 +216,8 @@ async function applyStructureUpdate(parentId: string | null, position: number) {
   updateSectionError.value = null;
   try {
     await updateSection(selectedSection.value.id, {
-      title: editSectionTitle.value,
+      title: editSectionHasHeading.value ? editSectionTitle.value : "",
+      has_heading: editSectionHasHeading.value,
       has_own_text: editSectionHasOwnText.value,
       parent_id: parentId,
       position,
@@ -288,9 +333,28 @@ onMounted(async () => {
               </p>
             </div>
             <div class="section-create-controls">
-              <input v-model="createSectionTitle" placeholder="New subsection title" />
-              <button :disabled="createSectionState === 'creating' || !createSectionTitle.trim()">
+              <input
+                v-model="createSectionTitle"
+                :disabled="!createSectionHasHeading"
+                :placeholder="createSectionHasHeading ? 'New subsection title' : 'This section will have no heading'"
+              />
+              <label class="toggle-inline">
+                <input v-model="createSectionHasHeading" type="checkbox" />
+                <span>Has heading</span>
+              </label>
+              <button :disabled="createSectionState === 'creating' || (createSectionHasHeading && !createSectionTitle.trim())">
                 {{ createSectionState === "creating" ? "Creating..." : "Add section" }}
+              </button>
+            </div>
+            <div class="section-create-controls secondary">
+              <input v-model.number="createUnnamedSectionCount" type="number" min="1" />
+              <button
+                type="button"
+                class="secondary-button"
+                :disabled="createSectionState === 'creating' || createUnnamedSectionCount < 1"
+                @click="handleCreateUnnamedSections"
+              >
+                {{ createSectionState === "creating" ? "Creating..." : "Add unnamed subsections" }}
               </button>
             </div>
             <p v-if="createSectionError" class="error">{{ createSectionError }}</p>
@@ -337,8 +401,19 @@ onMounted(async () => {
             <div class="section-edit-grid">
               <label>
                 Title
-                <input v-model="editSectionTitle" placeholder="Section title" />
+                <input
+                  v-model="editSectionTitle"
+                  :disabled="!editSectionHasHeading"
+                  :placeholder="editSectionHasHeading ? 'Section title' : 'This section has no heading'"
+                />
               </label>
+              <div class="checkbox-row">
+                <span>Heading</span>
+                <label class="checkbox-inline">
+                  <input v-model="editSectionHasHeading" type="checkbox" />
+                  <span>This section has a heading</span>
+                </label>
+              </div>
               <div class="checkbox-row">
                 <span>Content</span>
                 <label class="checkbox-inline">
@@ -408,6 +483,10 @@ onMounted(async () => {
   flex-wrap: wrap;
 }
 
+.section-create-controls.secondary {
+  align-items: center;
+}
+
 .section-create-controls input,
 .section-edit-grid input,
 .section-edit-grid select {
@@ -436,6 +515,11 @@ onMounted(async () => {
   color: white;
 }
 
+.secondary-button {
+  background: #efe4d6;
+  color: #4d3322;
+}
+
 .section-move-actions button {
   background: #efe4d6;
   color: #4d3322;
@@ -448,7 +532,7 @@ onMounted(async () => {
 
 .section-edit-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 120px 180px;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) 120px 180px;
   gap: 0.85rem;
   align-items: end;
 }
@@ -481,6 +565,17 @@ onMounted(async () => {
 
 .checkbox-inline input {
   margin: 0;
+}
+
+.toggle-inline {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.85rem 0.95rem;
+  border-radius: 0.95rem;
+  background: white;
+  box-shadow: inset 0 0 0 1px rgba(35, 24, 15, 0.08);
+  color: #2d1d12;
 }
 
 .error {

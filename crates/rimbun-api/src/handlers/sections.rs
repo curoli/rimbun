@@ -16,6 +16,7 @@ use crate::{
 pub struct CreateSectionRequest {
     pub parent_id: Option<uuid::Uuid>,
     pub title: String,
+    pub has_heading: bool,
     pub has_own_text: bool,
     pub position: i32,
 }
@@ -23,6 +24,7 @@ pub struct CreateSectionRequest {
 #[derive(Debug, Deserialize)]
 pub struct UpdateSectionRequest {
     pub title: String,
+    pub has_heading: bool,
     pub has_own_text: bool,
     pub position: i32,
     pub parent_id: Option<uuid::Uuid>,
@@ -53,7 +55,7 @@ pub async fn create(
         .map_err(|err| ApiError::internal(err.to_string()))?
         .ok_or_else(|| ApiError::not_found("document not found"))?;
 
-    if payload.title.trim().is_empty() {
+    if payload.has_heading && payload.title.trim().is_empty() {
         return Err(ApiError::bad_request("title is required"));
     }
 
@@ -80,6 +82,7 @@ pub async fn create(
             document_id,
             parent_id: payload.parent_id,
             title: payload.title.trim().to_owned(),
+            has_heading: payload.has_heading,
             has_own_text: payload.has_own_text,
             position: payload.position,
             path,
@@ -130,7 +133,7 @@ pub async fn update(
         .map_err(|err| ApiError::internal(err.to_string()))?
         .ok_or_else(|| ApiError::not_found("section not found"))?;
 
-    if payload.title.trim().is_empty() {
+    if payload.has_heading && payload.title.trim().is_empty() {
         return Err(ApiError::bad_request("title is required"));
     }
 
@@ -157,6 +160,7 @@ pub async fn update(
         &state.pool,
         id,
         payload.title.trim(),
+        payload.has_heading,
         payload.has_own_text,
         payload.parent_id,
         payload.position,

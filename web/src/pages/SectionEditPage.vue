@@ -54,6 +54,10 @@ const personalBaseSubmission = computed(() => {
   );
 });
 
+const sectionHeadingLabel = computed(() =>
+  selectedSection.value?.has_heading ? selectedSection.value.title : "No heading",
+);
+
 function submissionLabel(submission: SectionViewResponse["active_submissions"][number]) {
   return `${submission.display_name} @${submission.username} • ${new Date(submission.published_at).toLocaleString()}`;
 }
@@ -180,8 +184,8 @@ onMounted(async () => {
         <div>
           <p class="eyebrow">Section Edit</p>
           <h1>
-            <span v-if="sectionNumber" class="section-number">{{ sectionNumber }}</span>
-            {{ selectedSection.title }}
+            <span v-if="selectedSection.has_heading && sectionNumber" class="section-number">{{ sectionNumber }}</span>
+            {{ sectionHeadingLabel }}
           </h1>
         </div>
         <div class="document-header-meta">
@@ -197,7 +201,7 @@ onMounted(async () => {
 
       <div class="document-main">
         <SectionEditor
-          :title="selectedSection.title"
+          :title="sectionHeadingLabel"
           :content="draftContent"
           :has-own-text="selectedSection.has_own_text"
           :save-state="saveState"
