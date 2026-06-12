@@ -196,7 +196,7 @@ fn default_dev_profile() -> ProfileConfig {
         ServiceConfig {
             workdir: ".".to_owned(),
             bootstrap: None,
-            run: "cargo run -p rimbun-embedding-service".to_owned(),
+            run: "cargo run -p rimbun-embedding-service --bin rimbun-embedding-service".to_owned(),
             stop: None,
         },
     );
@@ -205,7 +205,7 @@ fn default_dev_profile() -> ProfileConfig {
         ServiceConfig {
             workdir: ".".to_owned(),
             bootstrap: None,
-            run: "cargo run -p rimbun-api".to_owned(),
+            run: "cargo run -p rimbun-api --bin rimbun-api".to_owned(),
             stop: None,
         },
     );
@@ -214,7 +214,7 @@ fn default_dev_profile() -> ProfileConfig {
         ServiceConfig {
             workdir: "web".to_owned(),
             bootstrap: Some("test -d node_modules || npm install".to_owned()),
-            run: "npm run dev -- --host 127.0.0.1 --port 5173".to_owned(),
+            run: "npm run dev -- --host 127.0.0.1 --port 5173 < /dev/null".to_owned(),
             stop: None,
         },
     );
