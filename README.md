@@ -162,6 +162,33 @@ Examples:
 ./rimbunctl dev set-password curoli 'new secure password'
 ```
 
+`rimbunctl` is now implemented as a Rust CLI with a thin launcher script at the repository root.
+
+It supports multiple profiles. If no custom config file exists, it provides a built-in `dev` profile matching the local development stack. You can add a repository-local `rimbunctl.toml` later to define additional profiles or override service commands.
+
+Example configuration:
+
+```toml
+[profiles.dev.services.db]
+workdir = "."
+bootstrap = "docker compose up -d postgres"
+run = "docker compose logs -f postgres"
+stop = "docker compose stop postgres >/dev/null"
+
+[profiles.dev.services.embedding]
+workdir = "."
+run = "cargo run -p rimbun-embedding-service"
+
+[profiles.dev.services.backend]
+workdir = "."
+run = "cargo run -p rimbun-api"
+
+[profiles.dev.services.frontend]
+workdir = "web"
+bootstrap = "test -d node_modules || npm install"
+run = "npm run dev -- --host 127.0.0.1 --port 5173"
+```
+
 ### 7. First local workflow
 
 After registering the first account, it will be a normal user by default. To test outline editing, promote it manually in Postgres:
