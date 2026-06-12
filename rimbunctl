@@ -7,6 +7,7 @@ PROFILE="${1:-}"
 COMMAND="${2:-}"
 THIRD_ARG="${3:-}"
 FOURTH_ARG="${4:-}"
+FIFTH_ARG="${5:-}"
 
 STATE_DIR="$SCRIPT_DIR/.rimbun"
 PROFILE_DIR="$STATE_DIR/$PROFILE"
@@ -24,6 +25,8 @@ if [[ "$COMMAND" == "log" ]]; then
     SERVICE="${THIRD_ARG:-all}"
     FOLLOW_FLAG="$FOURTH_ARG"
   fi
+elif [[ "$COMMAND" == "set-password" ]]; then
+  :
 else
   SERVICE="${THIRD_ARG:-all}"
 fi
@@ -44,6 +47,7 @@ Commands:
   stop [service|all]
   restart [service|all]
   log [service|all] [--follow|-f]
+  set-password <username> <new-password>
 
 Services:
   db
@@ -299,8 +303,22 @@ show_logs() {
 }
 
 ensure_profile
-is_valid_service "$SERVICE" || die "unknown service '$SERVICE'"
 ensure_state_dirs
+
+if [[ "$COMMAND" != "set-password" ]]; then
+  is_valid_service "$SERVICE" || die "unknown service '$SERVICE'"
+fi
+
+set_password() {
+  local username="$1"
+  local new_password="$2"
+  [[ -n "$username" ]] || die "username is required"
+  [[ -n "$new_password" ]] || die "new password is required"
+  (
+    cd "$SCRIPT_DIR"
+    cargo run -p rimbun-api --bin rimbun-set-password -- "$username" "$new_password"
+  )
+}
 
 case "$COMMAND" in
   start)
@@ -327,6 +345,10 @@ case "$COMMAND" in
       *) die "unknown log option '$FOLLOW_FLAG'" ;;
     esac
     show_logs "$SERVICE" "$([[ "$FOLLOW_FLAG" == "--follow" || "$FOLLOW_FLAG" == "-f" ]] && echo 1 || echo 0)"
+    ;;
+  set-password)
+    [[ -z "$FIFTH_ARG" ]] || die "too many arguments for set-password"
+    set_password "$THIRD_ARG" "$FOURTH_ARG"
     ;;
   *)
     usage

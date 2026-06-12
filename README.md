@@ -136,6 +136,7 @@ Available commands:
 ./rimbunctl dev stop [service]
 ./rimbunctl dev restart [service]
 ./rimbunctl dev log [service] [--follow]
+./rimbunctl dev set-password <username> <new-password>
 ```
 
 Supported services:
@@ -158,6 +159,7 @@ Examples:
 ./rimbunctl dev restart backend
 ./rimbunctl dev log frontend --follow
 ./rimbunctl dev log all
+./rimbunctl dev set-password curoli 'new secure password'
 ```
 
 ### 7. First local workflow
