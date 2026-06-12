@@ -25,6 +25,10 @@ pub async fn build(config: Config) -> anyhow::Result<Router> {
         )
         .route("/api/users", get(crate::handlers::users::list))
         .route(
+            "/api/users/{id}/reset-password",
+            post(crate::handlers::users::reset_password),
+        )
+        .route(
             "/api/site-settings",
             get(crate::handlers::site_settings::get)
                 .patch(crate::handlers::site_settings::update),

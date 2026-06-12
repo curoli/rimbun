@@ -638,6 +638,76 @@ async fn admin_can_list_all_users() {
 }
 
 #[tokio::test]
+async fn admin_can_reset_user_password_and_user_can_login_with_it() {
+    let Some(pool) = test_pool().await else {
+        eprintln!("Skipping integration test: TEST_DATABASE_URL not set or unreachable");
+        return;
+    };
+    reset_schema(&pool).await;
+
+    let (_admin_id, admin_session) = seed_privileged_user(&pool).await;
+    let (_normal_id, _normal_session) = seed_user_with_role(&pool, "normal").await;
+
+    let app = app::build(test_config(
+        std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL"),
+    ))
+    .await
+    .expect("build app");
+
+    let list_request = Request::builder()
+        .method(Method::GET)
+        .uri("/api/users")
+        .header(header::COOKIE, format!("rimbun_session={admin_session}"))
+        .body(Body::empty())
+        .expect("list request");
+
+    let list_response = app.clone().oneshot(list_request).await.expect("list response");
+    assert_eq!(list_response.status(), StatusCode::OK);
+
+    let list_body = to_bytes(list_response.into_body(), usize::MAX)
+        .await
+        .expect("read body");
+    let users: Vec<serde_json::Value> = serde_json::from_slice(&list_body).expect("users json");
+    let normal_user = users
+        .iter()
+        .find(|user| user["username"] == "bob")
+        .expect("normal user");
+    let normal_user_id = normal_user["id"].as_str().expect("user id");
+
+    let reset_request = Request::builder()
+        .method(Method::POST)
+        .uri(format!("/api/users/{normal_user_id}/reset-password"))
+        .header(header::COOKIE, format!("rimbun_session={admin_session}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            json!({
+                "new_password": "admin reset correct horse"
+            })
+            .to_string(),
+        ))
+        .expect("reset request");
+
+    let reset_response = app.clone().oneshot(reset_request).await.expect("reset response");
+    assert_eq!(reset_response.status(), StatusCode::OK);
+
+    let login_request = Request::builder()
+        .method(Method::POST)
+        .uri("/api/auth/login")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            json!({
+                "identifier": "bob",
+                "password": "admin reset correct horse"
+            })
+            .to_string(),
+        ))
+        .expect("login request");
+
+    let login_response = app.oneshot(login_request).await.expect("login response");
+    assert_eq!(login_response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
 async fn publish_rebuilds_projection_and_supersedes_previous_submission() {
     let Some(pool) = test_pool().await else {
         eprintln!("Skipping integration test: TEST_DATABASE_URL not set or unreachable");

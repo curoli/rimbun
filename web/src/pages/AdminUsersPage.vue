@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 
-import { listUsers } from "../api/users";
+import { listUsers, resetUserPassword } from "../api/users";
 import type { User } from "../api/types";
 import { useAuthStore } from "../stores/auth";
 
@@ -12,6 +12,9 @@ const router = useRouter();
 const users = ref<User[]>([]);
 const isLoading = ref(true);
 const error = ref<string | null>(null);
+const passwordDrafts = ref<Record<string, string>>({});
+const resetStates = ref<Record<string, "idle" | "saving">>({});
+const resetMessages = ref<Record<string, string>>({});
 
 const isAdmin = computed(() =>
   auth.user ? ["admin", "privileged"].includes(auth.user.role) : false,
@@ -26,6 +29,48 @@ async function loadUsers() {
     error.value = loadError instanceof Error ? loadError.message : "Failed to load users";
   } finally {
     isLoading.value = false;
+  }
+}
+
+async function handleResetPassword(userId: string) {
+  const draft = passwordDrafts.value[userId]?.trim() ?? "";
+  if (!draft) {
+    resetMessages.value = {
+      ...resetMessages.value,
+      [userId]: "Enter a new password first.",
+    };
+    return;
+  }
+
+  resetStates.value = {
+    ...resetStates.value,
+    [userId]: "saving",
+  };
+  resetMessages.value = {
+    ...resetMessages.value,
+    [userId]: "",
+  };
+
+  try {
+    await resetUserPassword(userId, { new_password: draft });
+    passwordDrafts.value = {
+      ...passwordDrafts.value,
+      [userId]: "",
+    };
+    resetMessages.value = {
+      ...resetMessages.value,
+      [userId]: "Password reset.",
+    };
+  } catch (resetError) {
+    resetMessages.value = {
+      ...resetMessages.value,
+      [userId]: resetError instanceof Error ? resetError.message : "Failed to reset password",
+    };
+  } finally {
+    resetStates.value = {
+      ...resetStates.value,
+      [userId]: "idle",
+    };
   }
 }
 
@@ -62,6 +107,7 @@ onMounted(async () => {
             <th>Email</th>
             <th>Role</th>
             <th>Created</th>
+            <th>Password reset</th>
           </tr>
         </thead>
         <tbody>
@@ -71,6 +117,23 @@ onMounted(async () => {
             <td>{{ user.email }}</td>
             <td>{{ user.role }}</td>
             <td>{{ new Date(user.created_at).toLocaleString() }}</td>
+            <td class="password-reset-cell">
+              <div class="password-reset-controls">
+                <input
+                  v-model="passwordDrafts[user.id]"
+                  type="password"
+                  placeholder="New password"
+                />
+                <button
+                  type="button"
+                  :disabled="resetStates[user.id] === 'saving' || !(passwordDrafts[user.id] ?? '').trim()"
+                  @click="handleResetPassword(user.id)"
+                >
+                  {{ resetStates[user.id] === "saving" ? "Resetting..." : "Reset password" }}
+                </button>
+              </div>
+              <p v-if="resetMessages[user.id]" class="reset-message">{{ resetMessages[user.id] }}</p>
+            </td>
           </tr>
         </tbody>
       </table>
@@ -139,6 +202,51 @@ onMounted(async () => {
   padding: 0.85rem 0.75rem;
   text-align: left;
   border-bottom: 1px solid rgba(35, 24, 15, 0.08);
+}
+
+.password-reset-cell {
+  min-width: 18rem;
+}
+
+.password-reset-controls {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.password-reset-controls input,
+.password-reset-controls button {
+  font: inherit;
+  border-radius: 0.8rem;
+}
+
+.password-reset-controls input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  padding: 0.7rem 0.8rem;
+  background: #fff;
+  box-shadow: inset 0 0 0 1px rgba(35, 24, 15, 0.08);
+}
+
+.password-reset-controls button {
+  border: 0;
+  padding: 0.72rem 0.9rem;
+  background: #8e4b16;
+  color: white;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.password-reset-controls button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.reset-message {
+  margin: 0.45rem 0 0;
+  color: #6f5947;
+  font-size: 0.85rem;
 }
 
 .users-table th {
