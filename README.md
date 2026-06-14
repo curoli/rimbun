@@ -136,6 +136,8 @@ Available commands:
 ./rimbunctl dev stop [service]
 ./rimbunctl dev restart [service]
 ./rimbunctl dev log [service] [--follow]
+./rimbunctl dev backup [name]
+./rimbunctl dev restore <backup-file>
 ./rimbunctl dev set-password <username> <new-password>
 ```
 
@@ -149,6 +151,7 @@ Supported services:
 
 Runtime state is written under `.rimbun/dev/`:
 
+- backups: `.rimbun/dev/backups/*.sql`
 - logs: `.rimbun/dev/logs/*.log`
 - pids: `.rimbun/dev/pids/*.pid`
 
@@ -159,6 +162,8 @@ Examples:
 ./rimbunctl dev restart backend
 ./rimbunctl dev log frontend --follow
 ./rimbunctl dev log all
+./rimbunctl dev backup before-upgrade
+./rimbunctl dev restore 20260614-120000-before-upgrade.sql
 ./rimbunctl dev set-password curoli 'new secure password'
 ```
 
@@ -187,7 +192,13 @@ run = "cargo run -p rimbun-api"
 workdir = "web"
 bootstrap = "test -d node_modules || npm install"
 run = "npm run dev -- --host 127.0.0.1 --port 5173"
+
+[profiles.dev.database]
+backup = "docker compose exec -T postgres pg_dump -U postgres -d rimbun > {file}"
+restore = "docker compose exec -T postgres psql -U postgres -d rimbun < {file}"
 ```
+
+The special placeholder `{file}` is replaced by the target backup path. For restores, use either a file name relative to `.rimbun/<profile>/backups/` or an absolute path.
 
 ### 7. First local workflow
 

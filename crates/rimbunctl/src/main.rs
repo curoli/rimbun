@@ -6,6 +6,7 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context, Result};
+use chrono::Utc;
 use clap::{Parser, Subcommand, ValueEnum};
 use nix::{
     sys::{
@@ -56,6 +57,12 @@ enum CommandKind {
         service: ServiceTarget,
         #[arg(long, short)]
         follow: bool,
+    },
+    Backup {
+        name: Option<String>,
+    },
+    Restore {
+        backup: String,
     },
     SetPassword {
         username: String,
@@ -113,6 +120,7 @@ struct FileConfig {
 #[derive(Debug, Clone, Deserialize)]
 struct ProfileConfig {
     services: BTreeMap<String, ServiceConfig>,
+    database: Option<DatabaseConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -123,9 +131,16 @@ struct ServiceConfig {
     stop: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct DatabaseConfig {
+    backup: String,
+    restore: String,
+}
+
 #[derive(Debug)]
 struct Paths {
     repo_root: PathBuf,
+    backup_dir: PathBuf,
     log_dir: PathBuf,
     pid_dir: PathBuf,
     run_dir: PathBuf,
@@ -151,6 +166,7 @@ fn state_paths(profile: &str) -> Result<Paths> {
     let profile_dir = state_dir.join(profile);
     Ok(Paths {
         repo_root,
+        backup_dir: profile_dir.join("backups"),
         log_dir: profile_dir.join("logs"),
         pid_dir: profile_dir.join("pids"),
         run_dir: profile_dir.join("run"),
@@ -158,6 +174,7 @@ fn state_paths(profile: &str) -> Result<Paths> {
 }
 
 fn ensure_state_dirs(paths: &Paths) -> Result<()> {
+    fs::create_dir_all(&paths.backup_dir)?;
     fs::create_dir_all(&paths.log_dir)?;
     fs::create_dir_all(&paths.pid_dir)?;
     fs::create_dir_all(&paths.run_dir)?;
@@ -218,7 +235,15 @@ fn default_dev_profile() -> ProfileConfig {
             stop: None,
         },
     );
-    ProfileConfig { services }
+    ProfileConfig {
+        services,
+        database: Some(DatabaseConfig {
+            backup: "docker compose exec -T postgres pg_dump -U postgres -d rimbun > {file}"
+                .to_owned(),
+            restore: "docker compose exec -T postgres psql -U postgres -d rimbun < {file}"
+                .to_owned(),
+        }),
+    }
 }
 
 fn profile_service<'a>(profile: &'a ProfileConfig, service: ServiceName) -> Result<&'a ServiceConfig> {
@@ -226,6 +251,13 @@ fn profile_service<'a>(profile: &'a ProfileConfig, service: ServiceName) -> Resu
         .services
         .get(service.as_str())
         .ok_or_else(|| anyhow!("service '{}' missing from profile", service.as_str()))
+}
+
+fn profile_database(profile: &ProfileConfig) -> Result<&DatabaseConfig> {
+    profile
+        .database
+        .as_ref()
+        .ok_or_else(|| anyhow!("profile has no database backup configuration"))
 }
 
 fn service_list(target: &ServiceTarget) -> Vec<ServiceName> {
@@ -312,6 +344,10 @@ fn shell_command(command: &str, workdir: &Path) -> Command {
     let mut cmd = Command::new("bash");
     cmd.arg("-lc").arg(command).current_dir(workdir);
     cmd
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
 fn run_shell(command: &str, workdir: &Path) -> Result<()> {
@@ -470,6 +506,91 @@ fn set_password(paths: &Paths, username: &str, new_password: &str) -> Result<()>
     Ok(())
 }
 
+fn ensure_db_running(paths: &Paths, profile: &ProfileConfig) -> Result<()> {
+    if service_status(paths, ServiceName::Db)? {
+        return Ok(());
+    }
+
+    start_service(paths, profile, ServiceName::Db)
+}
+
+fn ensure_restore_safe(paths: &Paths) -> Result<()> {
+    for service in [
+        ServiceName::Frontend,
+        ServiceName::Backend,
+        ServiceName::Embedding,
+    ] {
+        if service_status(paths, service)? {
+            bail!(
+                "service '{}' is running; stop application services before restore",
+                service.as_str()
+            );
+        }
+    }
+    Ok(())
+}
+
+fn sanitize_backup_name(name: &str) -> String {
+    let sanitized: String = name
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    sanitized.trim_matches('_').to_owned()
+}
+
+fn create_backup(paths: &Paths, profile: &ProfileConfig, name: Option<&str>) -> Result<()> {
+    ensure_db_running(paths, profile)?;
+
+    let database = profile_database(profile)?;
+    let timestamp = Utc::now().format("%Y%m%d-%H%M%S").to_string();
+    let suffix = name
+        .map(sanitize_backup_name)
+        .filter(|value| !value.is_empty())
+        .map(|value| format!("-{value}"))
+        .unwrap_or_default();
+    let backup_path = paths.backup_dir.join(format!("{timestamp}{suffix}.sql"));
+    let command = database
+        .backup
+        .replace("{file}", &shell_quote(&backup_path.display().to_string()));
+
+    run_shell(&command, &paths.repo_root)?;
+    println!("Created backup {}", backup_path.display());
+    Ok(())
+}
+
+fn resolve_backup_path(paths: &Paths, backup: &str) -> PathBuf {
+    let candidate = PathBuf::from(backup);
+    if candidate.is_absolute() {
+        candidate
+    } else {
+        paths.backup_dir.join(candidate)
+    }
+}
+
+fn restore_backup(paths: &Paths, profile: &ProfileConfig, backup: &str) -> Result<()> {
+    ensure_restore_safe(paths)?;
+    ensure_db_running(paths, profile)?;
+
+    let backup_path = resolve_backup_path(paths, backup);
+    if !backup_path.exists() {
+        bail!("backup file '{}' not found", backup_path.display());
+    }
+
+    let database = profile_database(profile)?;
+    let command = database
+        .restore
+        .replace("{file}", &shell_quote(&backup_path.display().to_string()));
+    run_shell(&command, &paths.repo_root)?;
+    println!("Restored backup {}", backup_path.display());
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let paths = state_paths(&cli.profile)?;
@@ -500,6 +621,8 @@ fn main() -> Result<()> {
             }
         }
         CommandKind::Log { service, follow } => show_logs(&paths, &service, follow)?,
+        CommandKind::Backup { name } => create_backup(&paths, profile, name.as_deref())?,
+        CommandKind::Restore { backup } => restore_backup(&paths, profile, &backup)?,
         CommandKind::SetPassword {
             username,
             new_password,
