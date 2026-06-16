@@ -1,7 +1,7 @@
 use axum::{
+    Json,
     extract::{Path, State},
     http::HeaderMap,
-    Json,
 };
 use serde::{Deserialize, Serialize};
 
@@ -67,7 +67,9 @@ pub async fn create(
             .ok_or_else(|| ApiError::not_found("parent section not found"))?;
 
         if parent.document_id != document_id {
-            return Err(ApiError::bad_request("parent section belongs to another document"));
+            return Err(ApiError::bad_request(
+                "parent section belongs to another document",
+            ));
         }
 
         format!("{}/{}", parent.path, section_id)
@@ -148,11 +150,15 @@ pub async fn update(
             .ok_or_else(|| ApiError::not_found("parent section not found"))?;
 
         if parent.document_id != current.document_id {
-            return Err(ApiError::bad_request("parent section belongs to another document"));
+            return Err(ApiError::bad_request(
+                "parent section belongs to another document",
+            ));
         }
 
         if parent.path == current.path || parent.path.starts_with(&(current.path.clone() + "/")) {
-            return Err(ApiError::bad_request("a section cannot move into its own subtree"));
+            return Err(ApiError::bad_request(
+                "a section cannot move into its own subtree",
+            ));
         }
     }
 
@@ -165,9 +171,9 @@ pub async fn update(
         payload.parent_id,
         payload.position,
     )
-        .await
-        .map_err(|err| ApiError::internal(err.to_string()))?
-        .ok_or_else(|| ApiError::not_found("section not found"))?;
+    .await
+    .map_err(|err| ApiError::internal(err.to_string()))?
+    .ok_or_else(|| ApiError::not_found("section not found"))?;
 
     Ok(Json(section))
 }
@@ -207,7 +213,10 @@ pub async fn view(
             .await
             .map_err(|err| ApiError::internal(err.to_string()))?;
 
-        (draft, preference.map(|item| item.preferred_base_submission_id))
+        (
+            draft,
+            preference.map(|item| item.preferred_base_submission_id),
+        )
     } else {
         (None, None)
     };

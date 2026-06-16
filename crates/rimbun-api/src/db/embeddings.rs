@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use rimbun_embedding_client::types::EmbeddingResponse;
 use serde::Serialize;
-use sqlx::{types::Json, FromRow, PgPool};
+use sqlx::{FromRow, PgPool, types::Json};
 
 #[derive(Debug, Clone, FromRow, Serialize)]
 pub struct SubmissionEmbeddingRecord {

@@ -1,7 +1,7 @@
 use axum::{
+    Json,
     extract::{Path, State},
     http::HeaderMap,
-    Json,
 };
 use serde::Deserialize;
 
@@ -36,7 +36,9 @@ pub async fn set_base(
         .ok_or_else(|| ApiError::not_found("submission not found"))?;
 
     if submission.section_id != section_id {
-        return Err(ApiError::bad_request("submission belongs to another section"));
+        return Err(ApiError::bad_request(
+            "submission belongs to another section",
+        ));
     }
 
     let preference = preferences::upsert(

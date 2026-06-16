@@ -1,6 +1,13 @@
-use std::{net::SocketAddr, sync::{Arc, Mutex}};
+use std::{
+    net::SocketAddr,
+    sync::{Arc, Mutex},
+};
 
-use axum::{extract::State, routing::{get, post}, Json, Router};
+use axum::{
+    Json, Router,
+    extract::State,
+    routing::{get, post},
+};
 use popsam_core::{CandleEmbeddingProvider, EmbeddingProvider, InputRecord};
 use rimbun_embedding_client::types::{EmbeddingRequest, EmbeddingResponse};
 use serde::Serialize;
@@ -24,8 +31,9 @@ impl Config {
             port: std::env::var("RIMBUN_EMBEDDING_PORT")
                 .unwrap_or_else(|_| "8001".to_owned())
                 .parse()?,
-            model_name: std::env::var("RIMBUN_EMBEDDING_MODEL")
-                .unwrap_or_else(|_| "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2".to_owned()),
+            model_name: std::env::var("RIMBUN_EMBEDDING_MODEL").unwrap_or_else(|_| {
+                "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2".to_owned()
+            }),
         })
     }
 }

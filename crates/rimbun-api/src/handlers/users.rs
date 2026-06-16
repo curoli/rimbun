@@ -1,21 +1,16 @@
 use argon2::{
-    password_hash::{PasswordHasher, SaltString},
     Argon2,
+    password_hash::{PasswordHasher, SaltString},
 };
 use axum::{
+    Json,
     extract::{Path, State},
     http::HeaderMap,
-    Json,
 };
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    db::users,
-    error::ApiError,
-    http::extractors::require_current_user,
-    state::AppState,
-};
+use crate::{db::users, error::ApiError, http::extractors::require_current_user, state::AppState};
 
 fn public_role(role: &str) -> &str {
     match role {

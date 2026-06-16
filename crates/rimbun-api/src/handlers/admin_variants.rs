@@ -1,19 +1,18 @@
 use argon2::{
-    password_hash::{PasswordHasher, SaltString},
     Argon2,
+    password_hash::{PasswordHasher, SaltString},
 };
 use axum::{
+    Json,
     extract::{Path, State},
     http::HeaderMap,
-    Json,
 };
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     db::{
-        documents,
-        sections,
+        documents, sections,
         submissions::{self, NewSubmission},
         test_runs,
         users::{self, NewUser},
@@ -313,7 +312,9 @@ pub async fn run_collection(
         .map_err(|err| ApiError::internal(err.to_string()))?;
 
     if entries.is_empty() {
-        return Err(ApiError::bad_request("collection must contain at least one variant"));
+        return Err(ApiError::bad_request(
+            "collection must contain at least one variant",
+        ));
     }
 
     let run = test_runs::create_run(
@@ -327,7 +328,11 @@ pub async fn run_collection(
     .await
     .map_err(|err| ApiError::internal(err.to_string()))?;
 
-    let document_slug = format!("test-{}-{}", sanitize_username(&collection.name), &run.id.to_string()[..8]);
+    let document_slug = format!(
+        "test-{}-{}",
+        sanitize_username(&collection.name),
+        &run.id.to_string()[..8]
+    );
     let document = documents::create(
         &state.pool,
         &documents::NewDocument {
@@ -410,18 +415,27 @@ pub async fn run_collection(
         .await
         .map_err(|err| ApiError::internal(err.to_string()))?;
 
-        submissions::supersede_previous_active_for_user(&mut tx, section.id, test_user.id, submission.id)
-            .await
-            .map_err(|err| ApiError::internal(err.to_string()))?;
+        submissions::supersede_previous_active_for_user(
+            &mut tx,
+            section.id,
+            test_user.id,
+            submission.id,
+        )
+        .await
+        .map_err(|err| ApiError::internal(err.to_string()))?;
 
         tx.commit()
             .await
             .map_err(|err| ApiError::internal(err.to_string()))?;
     }
 
-    crate::db::projections::rebuild_trivial_for_section(&state.pool, &state.embedding_client, section.id)
-        .await
-        .map_err(|err| ApiError::internal(err.to_string()))?;
+    crate::db::projections::rebuild_trivial_for_section(
+        &state.pool,
+        &state.embedding_client,
+        section.id,
+    )
+    .await
+    .map_err(|err| ApiError::internal(err.to_string()))?;
 
     Ok(Json(RunCollectionResponse {
         run,

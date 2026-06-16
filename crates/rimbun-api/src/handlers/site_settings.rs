@@ -1,4 +1,4 @@
-use axum::{extract::State, http::HeaderMap, Json};
+use axum::{Json, extract::State, http::HeaderMap};
 use serde::Deserialize;
 
 use crate::{
@@ -41,7 +41,9 @@ pub async fn update(
     require_admin(&user)?;
 
     if payload.brand_name.trim().is_empty() || payload.browser_title.trim().is_empty() {
-        return Err(ApiError::bad_request("brand name and browser title are required"));
+        return Err(ApiError::bad_request(
+            "brand name and browser title are required",
+        ));
     }
 
     let settings = site_settings::upsert(

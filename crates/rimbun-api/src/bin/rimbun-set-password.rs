@@ -1,8 +1,8 @@
 use std::process::ExitCode;
 
 use argon2::{
-    password_hash::{PasswordHasher, SaltString},
     Argon2,
+    password_hash::{PasswordHasher, SaltString},
 };
 use rand_core::OsRng;
 use sqlx::postgres::PgPoolOptions;
@@ -10,7 +10,9 @@ use sqlx::postgres::PgPoolOptions;
 use rimbun_api::{config::Config, db::users};
 
 fn usage() {
-    eprintln!("Usage: cargo run -p rimbun-api --bin rimbun-set-password -- <username> <new-password>");
+    eprintln!(
+        "Usage: cargo run -p rimbun-api --bin rimbun-set-password -- <username> <new-password>"
+    );
 }
 
 #[tokio::main]

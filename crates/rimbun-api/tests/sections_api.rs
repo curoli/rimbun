@@ -1,10 +1,10 @@
 use axum::{
-    body::{to_bytes, Body},
-    http::{header, HeaderMap, Method, Request, StatusCode},
+    body::{Body, to_bytes},
+    http::{HeaderMap, Method, Request, StatusCode, header},
 };
 use rimbun_api::{app, config::Config};
 use serde_json::json;
-use sqlx::{postgres::PgPoolOptions, PgPool};
+use sqlx::{PgPool, postgres::PgPoolOptions};
 use tower::util::ServiceExt;
 
 async fn test_pool() -> Option<PgPool> {
@@ -121,7 +121,11 @@ async fn seed_document_tree(
     (document_id, parent_a, parent_b, child)
 }
 
-async fn seed_nested_descendant(pool: &PgPool, document_id: uuid::Uuid, child: uuid::Uuid) -> uuid::Uuid {
+async fn seed_nested_descendant(
+    pool: &PgPool,
+    document_id: uuid::Uuid,
+    child: uuid::Uuid,
+) -> uuid::Uuid {
     let grandchild = uuid::Uuid::new_v4();
     sqlx::query(
         r#"
@@ -179,10 +183,7 @@ async fn seed_single_section_document(
     (document_id, section_id)
 }
 
-async fn seed_variant_collection(
-    pool: &PgPool,
-    created_by: uuid::Uuid,
-) -> uuid::Uuid {
+async fn seed_variant_collection(pool: &PgPool, created_by: uuid::Uuid) -> uuid::Uuid {
     let collection_id = uuid::Uuid::new_v4();
     sqlx::query(
         r#"
@@ -199,8 +200,18 @@ async fn seed_variant_collection(
     .expect("insert variant collection");
 
     for (position, label, username_hint, markdown_content) in [
-        (0_i32, "Alice Variant", Some("alice"), "Helaragon kommt aus Bandung."),
-        (1_i32, "Bob Variant", Some("bob"), "Burgerkill kommt aus Bandung."),
+        (
+            0_i32,
+            "Alice Variant",
+            Some("alice"),
+            "Helaragon kommt aus Bandung.",
+        ),
+        (
+            1_i32,
+            "Bob Variant",
+            Some("bob"),
+            "Burgerkill kommt aus Bandung.",
+        ),
     ] {
         sqlx::query(
             r#"
@@ -287,11 +298,12 @@ async fn patch_section_moves_section_and_rewrites_descendants() {
     assert_eq!(moved.1, 0);
     assert_eq!(moved.2, format!("{parent_b}/{child}"));
 
-    let descendant_path = sqlx::query_scalar::<_, String>("select path from sections where id = $1")
-        .bind(grandchild)
-        .fetch_one(&pool)
-        .await
-        .expect("load grandchild path");
+    let descendant_path =
+        sqlx::query_scalar::<_, String>("select path from sections where id = $1")
+            .bind(grandchild)
+            .fetch_one(&pool)
+            .await
+            .expect("load grandchild path");
     assert_eq!(descendant_path, format!("{parent_b}/{child}/{grandchild}"));
 
     let root_positions = sqlx::query_as::<_, (uuid::Uuid, i32)>(
@@ -405,7 +417,10 @@ async fn patch_section_reorders_within_same_parent() {
     .fetch_all(&pool)
     .await
     .expect("load root positions");
-    assert_eq!(root_positions, vec![(parent_b, 0), (parent_a, 1), (parent_c, 2)]);
+    assert_eq!(
+        root_positions,
+        vec![(parent_b, 0), (parent_a, 1), (parent_c, 2)]
+    );
 }
 
 #[tokio::test]
@@ -437,13 +452,18 @@ async fn auth_register_me_logout_roundtrip_works_via_session_cookie() {
         ))
         .expect("register request");
 
-    let register_response = app.clone().oneshot(register_request).await.expect("register response");
+    let register_response = app
+        .clone()
+        .oneshot(register_request)
+        .await
+        .expect("register response");
     assert_eq!(register_response.status(), StatusCode::OK);
     let cookie_header = session_cookie_header(register_response.headers());
     let register_body = to_bytes(register_response.into_body(), usize::MAX)
         .await
         .expect("register body");
-    let register_json: serde_json::Value = serde_json::from_slice(&register_body).expect("register json");
+    let register_json: serde_json::Value =
+        serde_json::from_slice(&register_body).expect("register json");
     assert_eq!(register_json["user"]["username"], "alice");
     assert!(register_json["session_token"].is_string());
 
@@ -470,7 +490,11 @@ async fn auth_register_me_logout_roundtrip_works_via_session_cookie() {
         .body(Body::empty())
         .expect("logout request");
 
-    let logout_response = app.clone().oneshot(logout_request).await.expect("logout response");
+    let logout_response = app
+        .clone()
+        .oneshot(logout_request)
+        .await
+        .expect("logout response");
     assert_eq!(logout_response.status(), StatusCode::OK);
 
     let me_after_logout_request = Request::builder()
@@ -516,7 +540,11 @@ async fn auth_profile_update_and_password_change_work() {
         ))
         .expect("register request");
 
-    let register_response = app.clone().oneshot(register_request).await.expect("register response");
+    let register_response = app
+        .clone()
+        .oneshot(register_request)
+        .await
+        .expect("register response");
     assert_eq!(register_response.status(), StatusCode::OK);
     let cookie_header = session_cookie_header(register_response.headers());
 
@@ -528,7 +556,11 @@ async fn auth_profile_update_and_password_change_work() {
         .body(Body::from(json!({ "display_name": "Bobby" }).to_string()))
         .expect("update me request");
 
-    let update_me_response = app.clone().oneshot(update_me_request).await.expect("update me response");
+    let update_me_response = app
+        .clone()
+        .oneshot(update_me_request)
+        .await
+        .expect("update me response");
     assert_eq!(update_me_response.status(), StatusCode::OK);
     let update_me_body = to_bytes(update_me_response.into_body(), usize::MAX)
         .await
@@ -661,7 +693,11 @@ async fn admin_can_reset_user_password_and_user_can_login_with_it() {
         .body(Body::empty())
         .expect("list request");
 
-    let list_response = app.clone().oneshot(list_request).await.expect("list response");
+    let list_response = app
+        .clone()
+        .oneshot(list_request)
+        .await
+        .expect("list response");
     assert_eq!(list_response.status(), StatusCode::OK);
 
     let list_body = to_bytes(list_response.into_body(), usize::MAX)
@@ -687,7 +723,11 @@ async fn admin_can_reset_user_password_and_user_can_login_with_it() {
         ))
         .expect("reset request");
 
-    let reset_response = app.clone().oneshot(reset_request).await.expect("reset response");
+    let reset_response = app
+        .clone()
+        .oneshot(reset_request)
+        .await
+        .expect("reset response");
     assert_eq!(reset_response.status(), StatusCode::OK);
 
     let login_request = Request::builder()
@@ -747,7 +787,11 @@ async fn publish_rebuilds_projection_and_supersedes_previous_submission() {
             .body(Body::from(body.to_string()))
             .expect("publish request");
 
-        let response = app.clone().oneshot(request).await.expect("publish response");
+        let response = app
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("publish response");
         assert_eq!(response.status(), StatusCode::OK);
     }
 
@@ -770,37 +814,35 @@ async fn publish_rebuilds_projection_and_supersedes_previous_submission() {
     assert_eq!(all_submissions[1].0, "Version A2");
     assert!(all_submissions[1].1.is_none());
 
-    let active_submissions =
-        sqlx::query_as::<_, (String,)>(
-            r#"
+    let active_submissions = sqlx::query_as::<_, (String,)>(
+        r#"
             select markdown_content
             from submissions
             where section_id = $1 and superseded_by is null
             order by published_at desc
             "#,
-        )
-        .bind(section_id)
-        .fetch_all(&pool)
-        .await
-        .expect("load active submissions");
+    )
+    .bind(section_id)
+    .fetch_all(&pool)
+    .await
+    .expect("load active submissions");
     assert_eq!(
         active_submissions,
         vec![("Version A2".to_owned(),), ("Version B1".to_owned(),)]
     );
 
-    let projection =
-        sqlx::query_as::<_, (String, i32)>(
-            r#"
+    let projection = sqlx::query_as::<_, (String, i32)>(
+        r#"
             select role, rank
             from section_projection_items
             where section_id = $1
             order by rank asc
             "#,
-        )
-        .bind(section_id)
-        .fetch_all(&pool)
-        .await
-        .expect("load projection");
+    )
+    .bind(section_id)
+    .fetch_all(&pool)
+    .await
+    .expect("load projection");
     assert_eq!(
         projection,
         vec![
@@ -842,16 +884,21 @@ async fn moderation_hidden_and_soft_deleted_remove_visibility_and_projection() {
                 json!({ "base_submission_id": null, "markdown_content": content }).to_string(),
             ))
             .expect("publish request");
-        let response = app.clone().oneshot(request).await.expect("publish response");
+        let response = app
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("publish response");
         assert_eq!(response.status(), StatusCode::OK);
     }
 
-    let visible_before =
-        sqlx::query_scalar::<_, i64>("select count(*) from section_projection_items where section_id = $1")
-            .bind(section_id)
-            .fetch_one(&pool)
-            .await
-            .expect("projection count before");
+    let visible_before = sqlx::query_scalar::<_, i64>(
+        "select count(*) from section_projection_items where section_id = $1",
+    )
+    .bind(section_id)
+    .fetch_one(&pool)
+    .await
+    .expect("projection count before");
     assert_eq!(visible_before, 2);
 
     let submission_b_id = sqlx::query_scalar::<_, uuid::Uuid>(
@@ -865,7 +912,10 @@ async fn moderation_hidden_and_soft_deleted_remove_visibility_and_projection() {
     let moderate_hidden_request = Request::builder()
         .method(Method::POST)
         .uri(format!("/api/submissions/{submission_b_id}/moderate"))
-        .header(header::COOKIE, format!("rimbun_session={moderator_session}"))
+        .header(
+            header::COOKIE,
+            format!("rimbun_session={moderator_session}"),
+        )
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(
             json!({
@@ -887,7 +937,10 @@ async fn moderation_hidden_and_soft_deleted_remove_visibility_and_projection() {
     let section_view_request = Request::builder()
         .method(Method::GET)
         .uri(format!("/api/sections/{section_id}/view"))
-        .header(header::COOKIE, format!("rimbun_session={moderator_session}"))
+        .header(
+            header::COOKIE,
+            format!("rimbun_session={moderator_session}"),
+        )
         .body(Body::empty())
         .expect("section view request");
     let section_view_response = app
@@ -901,8 +954,20 @@ async fn moderation_hidden_and_soft_deleted_remove_visibility_and_projection() {
         .expect("section view body");
     let section_view_json: serde_json::Value =
         serde_json::from_slice(&section_view_body).expect("section view json");
-    assert_eq!(section_view_json["active_submissions"].as_array().expect("active array").len(), 1);
-    assert_eq!(section_view_json["projection"].as_array().expect("projection array").len(), 1);
+    assert_eq!(
+        section_view_json["active_submissions"]
+            .as_array()
+            .expect("active array")
+            .len(),
+        1
+    );
+    assert_eq!(
+        section_view_json["projection"]
+            .as_array()
+            .expect("projection array")
+            .len(),
+        1
+    );
 
     let submission_a_id = sqlx::query_scalar::<_, uuid::Uuid>(
         "select id from submissions where section_id = $1 and markdown_content = 'Visible A'",
@@ -915,7 +980,10 @@ async fn moderation_hidden_and_soft_deleted_remove_visibility_and_projection() {
     let moderate_soft_delete_request = Request::builder()
         .method(Method::POST)
         .uri(format!("/api/submissions/{submission_a_id}/moderate"))
-        .header(header::COOKIE, format!("rimbun_session={moderator_session}"))
+        .header(
+            header::COOKIE,
+            format!("rimbun_session={moderator_session}"),
+        )
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(
             json!({
@@ -934,12 +1002,13 @@ async fn moderation_hidden_and_soft_deleted_remove_visibility_and_projection() {
         .expect("soft delete response");
     assert_eq!(deleted_response.status(), StatusCode::OK);
 
-    let projection_after_delete =
-        sqlx::query_scalar::<_, i64>("select count(*) from section_projection_items where section_id = $1")
-            .bind(section_id)
-            .fetch_one(&pool)
-            .await
-            .expect("projection count after delete");
+    let projection_after_delete = sqlx::query_scalar::<_, i64>(
+        "select count(*) from section_projection_items where section_id = $1",
+    )
+    .bind(section_id)
+    .fetch_one(&pool)
+    .await
+    .expect("projection count after delete");
     assert_eq!(projection_after_delete, 0);
 }
 
@@ -962,12 +1031,18 @@ async fn admin_can_create_and_delete_test_run_from_variant_collection() {
 
     let create_request = Request::builder()
         .method(Method::POST)
-        .uri(format!("/api/admin/variant-collections/{collection_id}/test-runs"))
+        .uri(format!(
+            "/api/admin/variant-collections/{collection_id}/test-runs"
+        ))
         .header(header::COOKIE, format!("rimbun_session={admin_session}"))
         .body(Body::empty())
         .expect("create run request");
 
-    let create_response = app.clone().oneshot(create_request).await.expect("create run response");
+    let create_response = app
+        .clone()
+        .oneshot(create_request)
+        .await
+        .expect("create run response");
     assert_eq!(create_response.status(), StatusCode::OK);
     let create_body = to_bytes(create_response.into_body(), usize::MAX)
         .await
@@ -1010,16 +1085,19 @@ async fn admin_can_create_and_delete_test_run_from_variant_collection() {
         .body(Body::empty())
         .expect("delete run request");
 
-    let delete_response = app.clone().oneshot(delete_request).await.expect("delete run response");
+    let delete_response = app
+        .clone()
+        .oneshot(delete_request)
+        .await
+        .expect("delete run response");
     assert_eq!(delete_response.status(), StatusCode::OK);
 
-    let document_exists = sqlx::query_scalar::<_, i64>(
-        "select count(*)::bigint from documents where id = $1",
-    )
-    .bind(document_id)
-    .fetch_one(&pool)
-    .await
-    .expect("document exists");
+    let document_exists =
+        sqlx::query_scalar::<_, i64>("select count(*)::bigint from documents where id = $1")
+            .bind(document_id)
+            .fetch_one(&pool)
+            .await
+            .expect("document exists");
     assert_eq!(document_exists, 0);
 
     let remaining_test_users = sqlx::query_scalar::<_, i64>(
@@ -1031,13 +1109,12 @@ async fn admin_can_create_and_delete_test_run_from_variant_collection() {
     .expect("remaining run users");
     assert_eq!(remaining_test_users, 0);
 
-    let deleted_status = sqlx::query_scalar::<_, String>(
-        "select status from test_runs where id = $1",
-    )
-    .bind(run_id)
-    .fetch_one(&pool)
-    .await
-    .expect("deleted status");
+    let deleted_status =
+        sqlx::query_scalar::<_, String>("select status from test_runs where id = $1")
+            .bind(run_id)
+            .fetch_one(&pool)
+            .await
+            .expect("deleted status");
     assert_eq!(deleted_status, "deleted");
 }
 
@@ -1073,7 +1150,11 @@ async fn moderation_excluded_from_clustering_keeps_visibility_but_removes_projec
                 json!({ "base_submission_id": null, "markdown_content": content }).to_string(),
             ))
             .expect("publish request");
-        let response = app.clone().oneshot(request).await.expect("publish response");
+        let response = app
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("publish response");
         assert_eq!(response.status(), StatusCode::OK);
     }
 
@@ -1088,7 +1169,10 @@ async fn moderation_excluded_from_clustering_keeps_visibility_but_removes_projec
     let moderate_request = Request::builder()
         .method(Method::POST)
         .uri(format!("/api/submissions/{submission_b_id}/moderate"))
-        .header(header::COOKIE, format!("rimbun_session={moderator_session}"))
+        .header(
+            header::COOKIE,
+            format!("rimbun_session={moderator_session}"),
+        )
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(
             json!({
@@ -1100,13 +1184,20 @@ async fn moderation_excluded_from_clustering_keeps_visibility_but_removes_projec
             .to_string(),
         ))
         .expect("moderation request");
-    let moderate_response = app.clone().oneshot(moderate_request).await.expect("moderate response");
+    let moderate_response = app
+        .clone()
+        .oneshot(moderate_request)
+        .await
+        .expect("moderate response");
     assert_eq!(moderate_response.status(), StatusCode::OK);
 
     let section_view_request = Request::builder()
         .method(Method::GET)
         .uri(format!("/api/sections/{section_id}/view"))
-        .header(header::COOKIE, format!("rimbun_session={moderator_session}"))
+        .header(
+            header::COOKIE,
+            format!("rimbun_session={moderator_session}"),
+        )
         .body(Body::empty())
         .expect("section view request");
     let section_view_response = app
@@ -1120,8 +1211,20 @@ async fn moderation_excluded_from_clustering_keeps_visibility_but_removes_projec
         .expect("section view body");
     let section_view_json: serde_json::Value =
         serde_json::from_slice(&section_view_body).expect("section view json");
-    assert_eq!(section_view_json["active_submissions"].as_array().expect("active array").len(), 2);
-    assert_eq!(section_view_json["projection"].as_array().expect("projection array").len(), 1);
+    assert_eq!(
+        section_view_json["active_submissions"]
+            .as_array()
+            .expect("active array")
+            .len(),
+        2
+    );
+    assert_eq!(
+        section_view_json["projection"]
+            .as_array()
+            .expect("projection array")
+            .len(),
+        1
+    );
 
     let projected_submission_id = section_view_json["projection"][0]["submission_id"]
         .as_str()
@@ -1198,7 +1301,11 @@ async fn section_compare_returns_ranked_block_variants() {
             .body(Body::from(body.to_string()))
             .expect("publish request");
 
-        let response = app.clone().oneshot(request).await.expect("publish response");
+        let response = app
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("publish response");
         assert_eq!(response.status(), StatusCode::OK);
     }
 
@@ -1225,13 +1332,20 @@ async fn section_compare_returns_ranked_block_variants() {
     assert_eq!(compare_json["section_number"], "1");
     assert!(compare_json["main_submission"]["submission_id"].is_string());
     assert_eq!(
-        compare_json["alternatives"].as_array().expect("alternatives array").len(),
+        compare_json["alternatives"]
+            .as_array()
+            .expect("alternatives array")
+            .len(),
         1
     );
 
     let blocks = compare_json["blocks"].as_array().expect("blocks array");
     assert!(!blocks.is_empty());
-    assert!(blocks.iter().any(|block| block["anchor"]["block_path"].is_array()));
+    assert!(
+        blocks
+            .iter()
+            .any(|block| block["anchor"]["block_path"].is_array())
+    );
     assert!(blocks.iter().any(|block| block["variants"].is_array()));
     assert!(blocks.iter().any(|block| {
         block["variants"]

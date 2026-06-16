@@ -1,6 +1,6 @@
 use axum::{
-    routing::{get, post, put},
     Router,
+    routing::{get, post, put},
 };
 use sqlx::postgres::PgPoolOptions;
 
@@ -18,7 +18,10 @@ pub async fn build(config: Config) -> anyhow::Result<Router> {
 
     let router = Router::new()
         .route("/health", get(|| async { "ok" }))
-        .route("/api/me", get(crate::handlers::auth::me).patch(crate::handlers::auth::update_me))
+        .route(
+            "/api/me",
+            get(crate::handlers::auth::me).patch(crate::handlers::auth::update_me),
+        )
         .route(
             "/api/me/change-password",
             post(crate::handlers::auth::change_password),
@@ -30,8 +33,7 @@ pub async fn build(config: Config) -> anyhow::Result<Router> {
         )
         .route(
             "/api/site-settings",
-            get(crate::handlers::site_settings::get)
-                .patch(crate::handlers::site_settings::update),
+            get(crate::handlers::site_settings::get).patch(crate::handlers::site_settings::update),
         )
         .route(
             "/api/admin/variant-collections",
@@ -79,8 +81,14 @@ pub async fn build(config: Config) -> anyhow::Result<Router> {
             "/api/sections/{id}",
             get(crate::handlers::sections::show).patch(crate::handlers::sections::update),
         )
-        .route("/api/sections/{id}/view", get(crate::handlers::sections::view))
-        .route("/api/sections/{id}/draft", put(crate::handlers::drafts::save))
+        .route(
+            "/api/sections/{id}/view",
+            get(crate::handlers::sections::view),
+        )
+        .route(
+            "/api/sections/{id}/draft",
+            put(crate::handlers::drafts::save),
+        )
         .route(
             "/api/sections/{id}/publish",
             post(crate::handlers::submissions::publish),

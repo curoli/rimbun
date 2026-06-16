@@ -132,7 +132,10 @@ pub async fn delete_collection(pool: &PgPool, id: uuid::Uuid) -> anyhow::Result<
     Ok(result.rows_affected() > 0)
 }
 
-pub async fn list_entries(pool: &PgPool, collection_id: uuid::Uuid) -> anyhow::Result<Vec<VariantEntryRecord>> {
+pub async fn list_entries(
+    pool: &PgPool,
+    collection_id: uuid::Uuid,
+) -> anyhow::Result<Vec<VariantEntryRecord>> {
     let records = sqlx::query_as::<_, VariantEntryRecord>(
         r#"
         select id, collection_id, position, label, username_hint, markdown_content, created_at, updated_at
@@ -166,7 +169,10 @@ pub async fn find_entry_by_id(
     Ok(record)
 }
 
-pub async fn create_entry(pool: &PgPool, entry: &NewVariantEntry) -> anyhow::Result<VariantEntryRecord> {
+pub async fn create_entry(
+    pool: &PgPool,
+    entry: &NewVariantEntry,
+) -> anyhow::Result<VariantEntryRecord> {
     let record = sqlx::query_as::<_, VariantEntryRecord>(
         r#"
         insert into variant_entries (id, collection_id, position, label, username_hint, markdown_content)

@@ -23,7 +23,10 @@ pub struct UpsertModeration {
     pub moderated_by: uuid::Uuid,
 }
 
-pub async fn upsert(pool: &PgPool, moderation: &UpsertModeration) -> anyhow::Result<ModerationRecord> {
+pub async fn upsert(
+    pool: &PgPool,
+    moderation: &UpsertModeration,
+) -> anyhow::Result<ModerationRecord> {
     let record = sqlx::query_as::<_, ModerationRecord>(
         r#"
         insert into submission_moderation (

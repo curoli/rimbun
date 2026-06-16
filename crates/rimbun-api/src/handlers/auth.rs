@@ -1,8 +1,8 @@
 use argon2::{
-    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
 };
-use axum::{extract::State, http::HeaderMap, Json};
+use axum::{Json, extract::State, http::HeaderMap};
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
@@ -14,7 +14,7 @@ use crate::{
     },
     error::ApiError,
     http::extractors::{
-        maybe_current_user, require_current_user, SESSION_COOKIE_NAME, SESSION_HEADER_NAME,
+        SESSION_COOKIE_NAME, SESSION_HEADER_NAME, maybe_current_user, require_current_user,
     },
     state::AppState,
 };
@@ -138,8 +138,8 @@ pub async fn change_password(
         ));
     }
 
-    let parsed_hash =
-        PasswordHash::new(&user.password_hash).map_err(|err| ApiError::internal(err.to_string()))?;
+    let parsed_hash = PasswordHash::new(&user.password_hash)
+        .map_err(|err| ApiError::internal(err.to_string()))?;
 
     Argon2::default()
         .verify_password(payload.current_password.as_bytes(), &parsed_hash)
@@ -224,8 +224,8 @@ pub async fn login(
         .map_err(|err| ApiError::internal(err.to_string()))?
         .ok_or_else(|| ApiError::unauthorized("invalid credentials"))?;
 
-    let parsed_hash =
-        PasswordHash::new(&user.password_hash).map_err(|err| ApiError::internal(err.to_string()))?;
+    let parsed_hash = PasswordHash::new(&user.password_hash)
+        .map_err(|err| ApiError::internal(err.to_string()))?;
 
     Argon2::default()
         .verify_password(payload.password.as_bytes(), &parsed_hash)

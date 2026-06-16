@@ -1,14 +1,14 @@
 use std::collections::HashMap;
 
 use axum::{
+    Json,
     extract::{Path, State},
     http::HeaderMap,
-    Json,
 };
 use chrono::{DateTime, Utc};
 use markalign::{
-    compare_many, normalize_document, BlockAnchor, BlockKind, Comparison,
-    ComparisonSet, Document, NormalizedDocument, Options, SourceSpan,
+    BlockAnchor, BlockKind, Comparison, ComparisonSet, Document, NormalizedDocument, Options,
+    SourceSpan, compare_many, normalize_document,
 };
 use serde::{Deserialize, Serialize};
 
@@ -139,8 +139,10 @@ pub async fn section_compare(
 
     let section_number = compute_section_number(&state, section.document_id, section.id).await?;
     let options = Options::default();
-    let main_document =
-        Document::with_id(main.submission.id.to_string(), main.submission.markdown_content.clone());
+    let main_document = Document::with_id(
+        main.submission.id.to_string(),
+        main.submission.markdown_content.clone(),
+    );
     let alternative_documents = alternatives
         .iter()
         .map(|entry| {
@@ -159,12 +161,8 @@ pub async fn section_compare(
         .collect::<Result<HashMap<_, _>, _>>()
         .map_err(|err| ApiError::internal(format!("markalign normalize failed: {err:?}")))?;
 
-    let comparison_set = compare_many(
-        &main_document,
-        &alternative_documents,
-        &options,
-    )
-    .map_err(|err| ApiError::internal(format!("markalign compare failed: {err:?}")))?;
+    let comparison_set = compare_many(&main_document, &alternative_documents, &options)
+        .map_err(|err| ApiError::internal(format!("markalign compare failed: {err:?}")))?;
 
     let blocks = map_compare_blocks(&comparison_set, &alternatives, &alternative_normalized);
 
@@ -330,17 +328,20 @@ fn unchanged_variant_for_block(
     let reference_block = reference_blocks
         .iter()
         .find(|block| block.index == block_index);
-    let alternative_block = comparison
-        .and_then(|comparison| {
-            reference_block.and_then(|reference_block| {
-                comparison.alternative_blocks.iter().find(|block| {
-                    block.anchor.stable_block_path == reference_block.anchor.stable_block_path
-                })
+    let alternative_block = comparison.and_then(|comparison| {
+        reference_block.and_then(|reference_block| {
+            comparison.alternative_blocks.iter().find(|block| {
+                block.anchor.stable_block_path == reference_block.anchor.stable_block_path
             })
-        });
+        })
+    });
     let source_span = alternative_block.and_then(|block| {
         alternative_normalized.map(|normalized| {
-            source_span_dto(normalized.source_map().span_for_range(block.source_range.clone()))
+            source_span_dto(
+                normalized
+                    .source_map()
+                    .span_for_range(block.source_range.clone()),
+            )
         })
     });
     let text = alternative_block
@@ -445,10 +446,7 @@ fn tokens_to_text(tokens: &[markalign::Token]) -> String {
         };
 
         if !rendered.is_empty()
-            && needs_word_separator(
-                rendered.chars().last(),
-                fragment.chars().next(),
-            )
+            && needs_word_separator(rendered.chars().last(), fragment.chars().next())
         {
             rendered.push(' ');
         }
@@ -474,7 +472,10 @@ async fn compute_section_number(
 
     let mut by_parent = HashMap::<Option<uuid::Uuid>, Vec<sections::SectionRecord>>::new();
     for section in sections {
-        by_parent.entry(section.parent_id).or_default().push(section);
+        by_parent
+            .entry(section.parent_id)
+            .or_default()
+            .push(section);
     }
 
     for group in by_parent.values_mut() {
@@ -530,7 +531,8 @@ mod tests {
         let alt_b = Document::with_id("b", "Burgerkill kommt aus Bandung.");
         let normalized_a = normalize_document(&alt_a, &options).expect("normalize a");
         let normalized_b = normalize_document(&alt_b, &options).expect("normalize b");
-        let comparison_set = compare_many(&main, &[alt_a.clone(), alt_b.clone()], &options).expect("compare");
+        let comparison_set =
+            compare_many(&main, &[alt_a.clone(), alt_b.clone()], &options).expect("compare");
         let block = comparison_set
             .reference_blocks
             .iter()

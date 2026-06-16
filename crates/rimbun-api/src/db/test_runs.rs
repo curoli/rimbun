@@ -78,7 +78,10 @@ pub async fn has_active_runs(pool: &PgPool, collection_id: uuid::Uuid) -> anyhow
     Ok(result > 0)
 }
 
-pub async fn find_run_by_id(pool: &PgPool, id: uuid::Uuid) -> anyhow::Result<Option<TestRunRecord>> {
+pub async fn find_run_by_id(
+    pool: &PgPool,
+    id: uuid::Uuid,
+) -> anyhow::Result<Option<TestRunRecord>> {
     let record = sqlx::query_as::<_, TestRunRecord>(
         r#"
         select id, collection_id, document_id, section_id, status, created_by, created_at, finished_at, deleted_at
@@ -133,7 +136,10 @@ pub async fn attach_run_targets(
     Ok(record)
 }
 
-pub async fn mark_run_deleted(pool: &PgPool, run_id: uuid::Uuid) -> anyhow::Result<Option<TestRunRecord>> {
+pub async fn mark_run_deleted(
+    pool: &PgPool,
+    run_id: uuid::Uuid,
+) -> anyhow::Result<Option<TestRunRecord>> {
     let record = sqlx::query_as::<_, TestRunRecord>(
         r#"
         update test_runs
@@ -171,7 +177,10 @@ pub async fn create_run_user(
     Ok(record)
 }
 
-pub async fn list_run_users(pool: &PgPool, test_run_id: uuid::Uuid) -> anyhow::Result<Vec<TestRunUserRecord>> {
+pub async fn list_run_users(
+    pool: &PgPool,
+    test_run_id: uuid::Uuid,
+) -> anyhow::Result<Vec<TestRunUserRecord>> {
     let records = sqlx::query_as::<_, TestRunUserRecord>(
         r#"
         select test_run_id, user_id, variant_entry_id

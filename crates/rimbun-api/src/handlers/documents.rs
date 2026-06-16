@@ -1,7 +1,7 @@
 use axum::{
+    Json,
     extract::{Path, State},
     http::HeaderMap,
-    Json,
 };
 use serde::{Deserialize, Serialize};
 
@@ -62,7 +62,9 @@ pub async fn create(
     }
 
     if !matches!(payload.visibility.as_str(), "public" | "authenticated") {
-        return Err(ApiError::bad_request("visibility must be public or authenticated"));
+        return Err(ApiError::bad_request(
+            "visibility must be public or authenticated",
+        ));
     }
 
     let document = documents::create(
@@ -72,7 +74,9 @@ pub async fn create(
             slug: payload.slug.trim().to_owned(),
             title: payload.title.trim().to_owned(),
             visibility: payload.visibility,
-            markdown_policy: payload.markdown_policy.unwrap_or_else(|| serde_json::json!({})),
+            markdown_policy: payload
+                .markdown_policy
+                .unwrap_or_else(|| serde_json::json!({})),
             created_by: user.id,
         },
     )
@@ -121,7 +125,9 @@ pub async fn update(
     }
 
     if !matches!(payload.visibility.as_str(), "public" | "authenticated") {
-        return Err(ApiError::bad_request("visibility must be public or authenticated"));
+        return Err(ApiError::bad_request(
+            "visibility must be public or authenticated",
+        ));
     }
 
     let document = documents::update(
@@ -130,7 +136,9 @@ pub async fn update(
         payload.slug.trim(),
         payload.title.trim(),
         &payload.visibility,
-        &payload.markdown_policy.unwrap_or_else(|| serde_json::json!({})),
+        &payload
+            .markdown_policy
+            .unwrap_or_else(|| serde_json::json!({})),
     )
     .await
     .map_err(|err| ApiError::bad_request(err.to_string()))?

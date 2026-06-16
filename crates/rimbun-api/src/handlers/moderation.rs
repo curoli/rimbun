@@ -1,7 +1,7 @@
 use axum::{
+    Json,
     extract::{Path, State},
     http::HeaderMap,
-    Json,
 };
 use serde::Deserialize;
 
@@ -55,8 +55,8 @@ pub async fn update(
         &state.embedding_client,
         submission.section_id,
     )
-        .await
-        .map_err(|err| ApiError::internal(err.to_string()))?;
+    .await
+    .map_err(|err| ApiError::internal(err.to_string()))?;
 
     Ok(Json(moderation))
 }

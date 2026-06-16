@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
 use popsam_core::{
-    run_election, CandidateBestResult, ElectionConfig, EmbeddedTextInput, ElectionResult,
+    CandidateBestResult, ElectionConfig, ElectionResult, EmbeddedTextInput, run_election,
 };
-use rimbun_embedding_client::{types::EmbeddingRequest, EmbeddingClient};
+use rimbun_embedding_client::{EmbeddingClient, types::EmbeddingRequest};
 use serde::Serialize;
 use sqlx::{FromRow, PgPool};
 
@@ -103,8 +103,10 @@ pub async fn rebuild_trivial_for_section(
     section_id: uuid::Uuid,
 ) -> anyhow::Result<Vec<ProjectionItemRecord>> {
     let active_submissions =
-        crate::db::submissions::list_active_clusterable_visible_by_section(pool, section_id).await?;
-    let ranked_items = rank_submissions_with_popsam(pool, embedding_client, &active_submissions).await?;
+        crate::db::submissions::list_active_clusterable_visible_by_section(pool, section_id)
+            .await?;
+    let ranked_items =
+        rank_submissions_with_popsam(pool, embedding_client, &active_submissions).await?;
     replace_for_section(pool, section_id, &ranked_items).await
 }
 
@@ -135,7 +137,10 @@ async fn build_embedding_inputs(
     embedding_client: &EmbeddingClient,
     submissions: &[SubmissionRecord],
 ) -> anyhow::Result<Vec<EmbeddedTextInput>> {
-    let submission_ids = submissions.iter().map(|submission| submission.id).collect::<Vec<_>>();
+    let submission_ids = submissions
+        .iter()
+        .map(|submission| submission.id)
+        .collect::<Vec<_>>();
     let stored_embeddings = embeddings::list_by_submission_ids(pool, &submission_ids).await?;
 
     let mut inputs = Vec::with_capacity(submissions.len());
@@ -247,7 +252,10 @@ fn assign_cluster_id(
         .iter()
         .filter_map(|anchor_id| {
             let anchor_embedding = embeddings.get(anchor_id)?;
-            Some((anchor_id.clone(), cosine_similarity(embedding, anchor_embedding)))
+            Some((
+                anchor_id.clone(),
+                cosine_similarity(embedding, anchor_embedding),
+            ))
         })
         .max_by(|left, right| left.1.total_cmp(&right.1))
         .map(|(anchor_id, _)| anchor_id)
