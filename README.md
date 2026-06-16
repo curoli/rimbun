@@ -167,38 +167,69 @@ Examples:
 ./rimbunctl dev set-password curoli 'new secure password'
 ```
 
-`rimbunctl` is now implemented as a Rust CLI with a thin launcher script at the repository root.
+`rimbunctl` is implemented as a Rust CLI with a thin launcher script at the repository root.
 
-It supports multiple profiles. If no custom config file exists, it provides a built-in `dev` profile matching the local development stack. You can add a repository-local `rimbunctl.toml` later to define additional profiles or override service commands.
+It now supports reusable `fragments` and concrete `profiles`.
+
+- `fragments` define reusable pieces of configuration
+- `profiles` define runnable combinations via `extends`
+- `vars` provide reusable parameters such as ports, database names, and hostnames
+- `env` defines environment variables passed to all commands in the profile
+- `state_namespace` decides where `.rimbun/<namespace>/...` runtime state is stored
+
+If no custom file exists, `rimbunctl` provides a built-in `dev` profile assembled from internal fragments. You can add a repository-local `rimbunctl.toml` to define further fragments and profiles.
 
 Example configuration:
 
 ```toml
-[profiles.dev.services.db]
+[fragments.local-docker.services.db]
 workdir = "."
 bootstrap = "docker compose up -d postgres"
 run = "docker compose logs -f postgres"
 stop = "docker compose stop postgres >/dev/null"
 
-[profiles.dev.services.embedding]
-workdir = "."
-run = "cargo run -p rimbun-embedding-service"
+[fragments.local-docker.database]
+backup = "docker compose exec -T postgres pg_dump -U postgres -d {db_name} > {file}"
+restore = "docker compose exec -T postgres psql -U postgres -d {db_name} < {file}"
 
-[profiles.dev.services.backend]
-workdir = "."
-run = "cargo run -p rimbun-api"
+[fragments.project_demo]
+vars.db_name = "rimbun_demo"
+vars.backend_port = "3000"
+vars.frontend_port = "5173"
+vars.embedding_port = "8001"
+env.DATABASE_URL = "postgres://postgres:postgres@127.0.0.1:5432/{db_name}"
+env.RIMBUN_PORT = "{backend_port}"
+env.RIMBUN_EMBEDDING_PORT = "{embedding_port}"
+env.EMBEDDING_SERVICE_URL = "http://127.0.0.1:{embedding_port}"
 
-[profiles.dev.services.frontend]
+[fragments.project_demo.services.embedding]
+workdir = "."
+run = "cargo run -p rimbun-embedding-service --bin rimbun-embedding-service"
+
+[fragments.project_demo.services.backend]
+workdir = "."
+run = "cargo run -p rimbun-api --bin rimbun-api"
+depends_on = ["db", "embedding"]
+
+[fragments.project_demo.services.frontend]
 workdir = "web"
 bootstrap = "test -d node_modules || npm install"
-run = "npm run dev -- --host 127.0.0.1 --port 5173"
+run = "npm run dev -- --host 127.0.0.1 --port {frontend_port} < /dev/null"
 
-[profiles.dev.database]
-backup = "docker compose exec -T postgres pg_dump -U postgres -d rimbun > {file}"
-restore = "docker compose exec -T postgres psql -U postgres -d rimbun < {file}"
+[profiles.demo_local]
+extends = ["local-docker", "project_demo"]
+state_namespace = "demo_local"
+
+[profiles.demo_local_2]
+extends = ["local-docker", "project_demo"]
+state_namespace = "demo_local_2"
+vars.db_name = "rimbun_demo_2"
+vars.backend_port = "3001"
+vars.frontend_port = "5174"
+vars.embedding_port = "8002"
 ```
 
-The special placeholder `{file}` is replaced by the target backup path. For restores, use either a file name relative to `.rimbun/<profile>/backups/` or an absolute path.
+The special placeholder `{file}` is replaced by the target backup path. For restores, use either a file name relative to `.rimbun/<state_namespace>/backups/` or an absolute path.
 
 ### 7. First local workflow
 
