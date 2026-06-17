@@ -231,6 +231,42 @@ vars.embedding_port = "8002"
 
 The special placeholder `{file}` is replaced by the target backup path. For restores, use either a file name relative to `.rimbun/<state_namespace>/backups/` or an absolute path.
 
+This repository also contains a concrete [rimbunctl.toml](./rimbunctl.toml) with nine predefined project profiles:
+
+- `quran-dev`
+- `quran-test`
+- `quran-prod`
+- `feature-requests-dev`
+- `feature-requests-test`
+- `feature-requests-prod`
+- `benaristan-dev`
+- `benaristan-test`
+- `benaristan-prod`
+
+These profiles are intended for three separate Rimbun projects:
+
+- Quran translations
+- Rimbun feature requests
+- Benaristan
+
+Each project has isolated:
+
+- Postgres database name
+- backend port
+- frontend port
+- embedding service port
+- `.rimbun/<state_namespace>/...` runtime state
+
+Examples:
+
+```bash
+./rimbunctl quran-dev start
+./rimbunctl feature-requests-test start
+./rimbunctl benaristan-prod start
+```
+
+The `dev` and `test` profiles use the normal local development stack. The `prod` profiles are local production-like profiles that run release Rust binaries and serve the built frontend statically, but they are still meant for one-machine operation rather than a full deployment platform.
+
 ### 7. First local workflow
 
 After registering the first account, it will be a normal user by default. To test outline editing, promote it manually in Postgres:

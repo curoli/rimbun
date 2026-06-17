@@ -1,0 +1,100 @@
+[fragments.ensure-profile-db.services.backend]
+workdir = "."
+bootstrap = "docker compose exec -T postgres psql -U postgres -d postgres -c \"SELECT 'CREATE DATABASE {db_name}' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '{db_name}')\\\\gexec\""
+
+[fragments.production-runtime.services.embedding]
+workdir = "."
+run = "cargo run --release -p rimbun-embedding-service --bin rimbun-embedding-service"
+
+[fragments.production-runtime.services.backend]
+workdir = "."
+run = "cargo run --release -p rimbun-api --bin rimbun-api"
+
+[fragments.production-runtime.services.frontend]
+workdir = "web"
+bootstrap = "npm install && npm run build"
+run = "python3 -m http.server {frontend_port} --bind 127.0.0.1 --directory dist < /dev/null"
+
+[fragments.project_quran]
+vars.project_name = "quran"
+vars.db_prefix = "quran_translations"
+
+[fragments.project_feature_requests]
+vars.project_name = "feature_requests"
+vars.db_prefix = "rimbun_feature_requests"
+
+[fragments.project_benaristan]
+vars.project_name = "benaristan"
+vars.db_prefix = "benaristan"
+
+[profiles.quran-dev]
+extends = ["local-docker", "rimbun-local", "ensure-profile-db", "project_quran"]
+state_namespace = "quran-dev"
+vars.db_name = "quran_translations_dev"
+vars.backend_port = "3000"
+vars.frontend_port = "5173"
+vars.embedding_port = "8001"
+
+[profiles.quran-test]
+extends = ["local-docker", "rimbun-local", "ensure-profile-db", "project_quran"]
+state_namespace = "quran-test"
+vars.db_name = "quran_translations_test"
+vars.backend_port = "3001"
+vars.frontend_port = "5174"
+vars.embedding_port = "8002"
+
+[profiles.quran-prod]
+extends = ["local-docker", "rimbun-local", "ensure-profile-db", "production-runtime", "project_quran"]
+state_namespace = "quran-prod"
+vars.db_name = "quran_translations_prod"
+vars.backend_port = "3002"
+vars.frontend_port = "4173"
+vars.embedding_port = "8003"
+
+[profiles.feature-requests-dev]
+extends = ["local-docker", "rimbun-local", "ensure-profile-db", "project_feature_requests"]
+state_namespace = "feature-requests-dev"
+vars.db_name = "rimbun_feature_requests_dev"
+vars.backend_port = "3010"
+vars.frontend_port = "5183"
+vars.embedding_port = "8011"
+
+[profiles.feature-requests-test]
+extends = ["local-docker", "rimbun-local", "ensure-profile-db", "project_feature_requests"]
+state_namespace = "feature-requests-test"
+vars.db_name = "rimbun_feature_requests_test"
+vars.backend_port = "3011"
+vars.frontend_port = "5184"
+vars.embedding_port = "8012"
+
+[profiles.feature-requests-prod]
+extends = ["local-docker", "rimbun-local", "ensure-profile-db", "production-runtime", "project_feature_requests"]
+state_namespace = "feature-requests-prod"
+vars.db_name = "rimbun_feature_requests_prod"
+vars.backend_port = "3012"
+vars.frontend_port = "4183"
+vars.embedding_port = "8013"
+
+[profiles.benaristan-dev]
+extends = ["local-docker", "rimbun-local", "ensure-profile-db", "project_benaristan"]
+state_namespace = "benaristan-dev"
+vars.db_name = "benaristan_dev"
+vars.backend_port = "3020"
+vars.frontend_port = "5193"
+vars.embedding_port = "8021"
+
+[profiles.benaristan-test]
+extends = ["local-docker", "rimbun-local", "ensure-profile-db", "project_benaristan"]
+state_namespace = "benaristan-test"
+vars.db_name = "benaristan_test"
+vars.backend_port = "3021"
+vars.frontend_port = "5194"
+vars.embedding_port = "8022"
+
+[profiles.benaristan-prod]
+extends = ["local-docker", "rimbun-local", "ensure-profile-db", "production-runtime", "project_benaristan"]
+state_namespace = "benaristan-prod"
+vars.db_name = "benaristan_prod"
+vars.backend_port = "3022"
+vars.frontend_port = "4193"
+vars.embedding_port = "8023"
