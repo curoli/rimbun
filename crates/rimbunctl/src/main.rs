@@ -913,6 +913,10 @@ fn set_password(
 }
 
 fn ensure_db_running(paths: &Paths, profile: &ResolvedProfile) -> Result<()> {
+    if !profile.services.contains_key(&ServiceName::Db) {
+        return Ok(());
+    }
+
     if service_status(paths, ServiceName::Db)? {
         return Ok(());
     }

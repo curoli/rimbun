@@ -288,6 +288,12 @@ Then:
 
 There is not yet a finished production deployment recipe in this repository, but the application can already be run in a simple production-style setup.
 
+For a concrete one-host setup for the three predefined project instances, see:
+
+- [docs/production-single-host.md](./docs/production-single-host.md)
+- [ops/systemd/](./ops/systemd)
+- [ops/nginx/](./ops/nginx)
+
 ### What you need
 
 - a Postgres database

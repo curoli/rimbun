@@ -1,0 +1,17 @@
+[Unit]
+Description=Rimbun API (%i)
+After=network.target postgresql.service rimbun-embedding@%i.service
+Requires=rimbun-embedding@%i.service
+
+[Service]
+Type=simple
+User=rimbun
+Group=rimbun
+WorkingDirectory=/srv/rimbun/repo
+EnvironmentFile=/etc/rimbun/%i.env
+ExecStart=/srv/rimbun/repo/target/release/rimbun-api
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

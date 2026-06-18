@@ -10,10 +10,12 @@ run = "cargo run --release -p rimbun-embedding-service --bin rimbun-embedding-se
 workdir = "."
 run = "cargo run --release -p rimbun-api --bin rimbun-api"
 
-[fragments.production-runtime.services.frontend]
-workdir = "web"
-bootstrap = "npm install && npm run build"
-run = "python3 -m http.server {frontend_port} --bind 127.0.0.1 --directory dist < /dev/null"
+[fragments.server-single-host]
+vars.deploy_root = "/srv/rimbun"
+env.DATABASE_URL = "postgres://postgres:postgres@127.0.0.1:5432/{db_name}"
+env.RIMBUN_PORT = "{backend_port}"
+env.RIMBUN_EMBEDDING_PORT = "{embedding_port}"
+env.EMBEDDING_SERVICE_URL = "http://127.0.0.1:{embedding_port}"
 
 [fragments.project_quran]
 vars.project_name = "quran"
@@ -44,12 +46,13 @@ vars.frontend_port = "5174"
 vars.embedding_port = "8002"
 
 [profiles.quran-prod]
-extends = ["local-docker", "rimbun-local", "ensure-profile-db", "production-runtime", "project_quran"]
+extends = ["server-single-host", "production-runtime", "project_quran"]
 state_namespace = "quran-prod"
 vars.db_name = "quran_translations_prod"
 vars.backend_port = "3002"
-vars.frontend_port = "4173"
 vars.embedding_port = "8003"
+vars.site_domain = "translations.ropeofgod.org"
+vars.frontend_root = "/srv/rimbun/sites/quran-prod/current"
 
 [profiles.feature-requests-dev]
 extends = ["local-docker", "rimbun-local", "ensure-profile-db", "project_feature_requests"]
@@ -68,12 +71,13 @@ vars.frontend_port = "5184"
 vars.embedding_port = "8012"
 
 [profiles.feature-requests-prod]
-extends = ["local-docker", "rimbun-local", "ensure-profile-db", "production-runtime", "project_feature_requests"]
+extends = ["server-single-host", "production-runtime", "project_feature_requests"]
 state_namespace = "feature-requests-prod"
 vars.db_name = "rimbun_feature_requests_prod"
 vars.backend_port = "3012"
-vars.frontend_port = "4183"
 vars.embedding_port = "8013"
+vars.site_domain = "docs.rimbun.org"
+vars.frontend_root = "/srv/rimbun/sites/feature-requests-prod/current"
 
 [profiles.benaristan-dev]
 extends = ["local-docker", "rimbun-local", "ensure-profile-db", "project_benaristan"]
@@ -92,9 +96,10 @@ vars.frontend_port = "5194"
 vars.embedding_port = "8022"
 
 [profiles.benaristan-prod]
-extends = ["local-docker", "rimbun-local", "ensure-profile-db", "production-runtime", "project_benaristan"]
+extends = ["server-single-host", "production-runtime", "project_benaristan"]
 state_namespace = "benaristan-prod"
 vars.db_name = "benaristan_prod"
 vars.backend_port = "3022"
-vars.frontend_port = "4193"
 vars.embedding_port = "8023"
+vars.site_domain = "docs.benaristan.org"
+vars.frontend_root = "/srv/rimbun/sites/benaristan-prod/current"

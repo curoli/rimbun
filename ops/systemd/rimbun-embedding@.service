@@ -1,0 +1,16 @@
+[Unit]
+Description=Rimbun Embedding Service (%i)
+After=network.target
+
+[Service]
+Type=simple
+User=rimbun
+Group=rimbun
+WorkingDirectory=/srv/rimbun/repo
+EnvironmentFile=/etc/rimbun/%i.env
+ExecStart=/srv/rimbun/repo/target/release/rimbun-embedding-service
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
