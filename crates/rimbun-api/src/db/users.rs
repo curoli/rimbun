@@ -117,6 +117,27 @@ pub async fn update_password_hash(
     Ok(record)
 }
 
+pub async fn update_role(
+    pool: &PgPool,
+    user_id: uuid::Uuid,
+    role: &str,
+) -> anyhow::Result<Option<UserRecord>> {
+    let record = sqlx::query_as::<_, UserRecord>(
+        r#"
+        update users
+        set role = $2
+        where id = $1
+        returning id, username, display_name, email, password_hash, role, created_at
+        "#,
+    )
+    .bind(user_id)
+    .bind(role)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(record)
+}
+
 pub async fn list_all(pool: &PgPool) -> anyhow::Result<Vec<UserRecord>> {
     let records = sqlx::query_as::<_, UserRecord>(
         r#"

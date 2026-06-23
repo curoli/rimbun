@@ -58,6 +58,10 @@ enum CommandKind {
     Restore {
         backup: String,
     },
+    SetRole {
+        username: String,
+        role: String,
+    },
     SetPassword {
         username: String,
         new_password: String,
@@ -912,6 +916,33 @@ fn set_password(
     Ok(())
 }
 
+fn set_role(paths: &Paths, profile: &ResolvedProfile, username: &str, role: &str) -> Result<()> {
+    if username.is_empty() {
+        bail!("username is required");
+    }
+    if role.is_empty() {
+        bail!("role is required");
+    }
+
+    let status = Command::new("cargo")
+        .arg("run")
+        .arg("-p")
+        .arg("rimbun-api")
+        .arg("--bin")
+        .arg("rimbun-set-role")
+        .arg("--")
+        .arg(username)
+        .arg(role)
+        .current_dir(&paths.repo_root)
+        .envs(&profile.env)
+        .status()?;
+
+    if !status.success() {
+        bail!("failed to set role");
+    }
+    Ok(())
+}
+
 fn ensure_db_running(paths: &Paths, profile: &ResolvedProfile) -> Result<()> {
     if !profile.services.contains_key(&ServiceName::Db) {
         return Ok(());
@@ -1038,6 +1069,9 @@ fn main() -> Result<()> {
             username,
             new_password,
         } => set_password(&paths, &profile, &username, &new_password)?,
+        CommandKind::SetRole { username, role } => {
+            set_role(&paths, &profile, &username, &role)?
+        }
     }
 
     Ok(())
