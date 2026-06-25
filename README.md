@@ -136,6 +136,7 @@ Available commands:
 ./rimbunctl dev stop [service]
 ./rimbunctl dev restart [service]
 ./rimbunctl dev log [service] [--follow]
+./rimbunctl dev list-profiles
 ./rimbunctl dev backup [name]
 ./rimbunctl dev restore <backup-file>
 ./rimbunctl dev set-role <username> <role>
@@ -163,6 +164,7 @@ Examples:
 ./rimbunctl dev restart backend
 ./rimbunctl dev log frontend --follow
 ./rimbunctl dev log all
+./rimbunctl dev list-profiles
 ./rimbunctl dev backup before-upgrade
 ./rimbunctl dev restore 20260614-120000-before-upgrade.sql
 ./rimbunctl dev set-role curoli privileged

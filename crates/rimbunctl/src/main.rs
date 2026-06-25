@@ -34,6 +34,7 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum CommandKind {
+    ListProfiles,
     Start {
         #[arg(default_value = "all")]
         service: ServiceTarget,
@@ -372,6 +373,12 @@ fn load_registry(repo_root: &Path) -> Result<ConfigRegistry> {
         registry.profiles.extend(file_config.profiles);
     }
     Ok(registry)
+}
+
+fn list_profiles(registry: &ConfigRegistry) {
+    for profile in registry.profiles.keys() {
+        println!("{profile}");
+    }
 }
 
 fn merge_service(base: &mut ServiceConfig, overlay: &ServiceConfig) {
@@ -1036,11 +1043,18 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let repo_root = repo_root()?;
     let registry = load_registry(&repo_root)?;
+
+    if matches!(cli.command, CommandKind::ListProfiles) {
+        list_profiles(&registry);
+        return Ok(());
+    }
+
     let profile = resolve_profile(&registry, &cli.profile)?;
     let paths = state_paths(&profile.state_namespace)?;
     ensure_state_dirs(&paths)?;
 
     match cli.command {
+        CommandKind::ListProfiles => {}
         CommandKind::Start { service } => {
             for service in dependency_order(&profile, &service)? {
                 start_service(&paths, &profile, service)?;
