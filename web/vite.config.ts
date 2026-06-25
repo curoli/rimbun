@@ -1,16 +1,19 @@
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 
+const backendPort = process.env.RIMBUN_PORT ?? "3000";
+const backendTarget = `http://127.0.0.1:${backendPort}`;
+
 export default defineConfig({
   plugins: [vue()],
   server: {
     proxy: {
       "/api": {
-        target: "http://127.0.0.1:3000",
+        target: backendTarget,
         changeOrigin: true,
       },
       "/health": {
-        target: "http://127.0.0.1:3000",
+        target: backendTarget,
         changeOrigin: true,
       },
     },
