@@ -1,19 +1,22 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
+    io::ErrorKind,
+    net::TcpListener,
+    os::unix::process::CommandExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    process::ExitCode,
+    thread,
+    time::Duration,
 };
 
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::Utc;
 use clap::{Parser, Subcommand, ValueEnum};
 use nix::{
-    sys::{
-        signal::{Signal, kill},
-        stat::Mode,
-    },
-    unistd::{Pid, mkfifo},
+    sys::signal::{Signal, kill, killpg},
+    unistd::Pid,
 };
 use serde::Deserialize;
 
@@ -174,6 +177,7 @@ struct DatabaseConfig {
 struct ResolvedProfile {
     profile_name: String,
     state_namespace: String,
+    vars: BTreeMap<String, String>,
     env: BTreeMap<String, String>,
     services: BTreeMap<ServiceName, ResolvedServiceConfig>,
     database: Option<ResolvedDatabaseConfig>,
@@ -207,13 +211,11 @@ struct Paths {
     backup_dir: PathBuf,
     log_dir: PathBuf,
     pid_dir: PathBuf,
-    run_dir: PathBuf,
 }
 
 #[derive(Debug)]
 struct ServicePids {
     service_pid: i32,
-    logger_pid: i32,
 }
 
 fn repo_root() -> Result<PathBuf> {
@@ -232,7 +234,6 @@ fn state_paths(state_namespace: &str) -> Result<Paths> {
         backup_dir: state_dir.join("backups"),
         log_dir: state_dir.join("logs"),
         pid_dir: state_dir.join("pids"),
-        run_dir: state_dir.join("run"),
         state_dir,
     })
 }
@@ -241,7 +242,6 @@ fn ensure_state_dirs(paths: &Paths) -> Result<()> {
     fs::create_dir_all(&paths.backup_dir)?;
     fs::create_dir_all(&paths.log_dir)?;
     fs::create_dir_all(&paths.pid_dir)?;
-    fs::create_dir_all(&paths.run_dir)?;
     Ok(())
 }
 
@@ -538,7 +538,6 @@ fn resolve_profile(registry: &ConfigRegistry, profile_name: &str) -> Result<Reso
     );
     vars.insert("log_dir".to_owned(), paths.log_dir.display().to_string());
     vars.insert("pid_dir".to_owned(), paths.pid_dir.display().to_string());
-    vars.insert("run_dir".to_owned(), paths.run_dir.display().to_string());
 
     let vars = interpolate_map(&vars, &vars);
     let env = interpolate_map(&resolved_layer.env, &vars);
@@ -602,6 +601,7 @@ fn resolve_profile(registry: &ConfigRegistry, profile_name: &str) -> Result<Reso
     Ok(ResolvedProfile {
         profile_name: profile_name.to_owned(),
         state_namespace,
+        vars,
         env,
         services,
         database,
@@ -616,10 +616,6 @@ fn log_path(paths: &Paths, service: ServiceName) -> PathBuf {
     paths.log_dir.join(format!("{}.log", service.as_str()))
 }
 
-fn fifo_path(paths: &Paths, service: ServiceName) -> PathBuf {
-    paths.run_dir.join(format!("{}.pipe", service.as_str()))
-}
-
 fn pid_running(pid: i32) -> bool {
     kill(Pid::from_raw(pid), None).is_ok()
 }
@@ -632,20 +628,14 @@ fn read_pids(paths: &Paths, service: ServiceName) -> Result<Option<ServicePids>>
 
     let raw = fs::read_to_string(&path)?;
     let mut service_pid = None;
-    let mut logger_pid = None;
     for line in raw.lines() {
         if let Some(value) = line.strip_prefix("service_pid=") {
             service_pid = Some(value.parse::<i32>()?);
-        } else if let Some(value) = line.strip_prefix("logger_pid=") {
-            logger_pid = Some(value.parse::<i32>()?);
         }
     }
 
-    match (service_pid, logger_pid) {
-        (Some(service_pid), Some(logger_pid)) => Ok(Some(ServicePids {
-            service_pid,
-            logger_pid,
-        })),
+    match service_pid {
+        Some(service_pid) => Ok(Some(ServicePids { service_pid })),
         _ => Ok(None),
     }
 }
@@ -653,10 +643,7 @@ fn read_pids(paths: &Paths, service: ServiceName) -> Result<Option<ServicePids>>
 fn write_pids(paths: &Paths, service: ServiceName, pids: &ServicePids) -> Result<()> {
     fs::write(
         pid_path(paths, service),
-        format!(
-            "service_pid={}\nlogger_pid={}\n",
-            pids.service_pid, pids.logger_pid
-        ),
+        format!("service_pid={}\n", pids.service_pid),
     )?;
     Ok(())
 }
@@ -666,7 +653,7 @@ fn service_status(paths: &Paths, service: ServiceName) -> Result<bool> {
         return Ok(false);
     };
 
-    if pid_running(pids.service_pid) || pid_running(pids.logger_pid) {
+    if pid_running(pids.service_pid) {
         return Ok(true);
     }
 
@@ -674,10 +661,74 @@ fn service_status(paths: &Paths, service: ServiceName) -> Result<bool> {
     Ok(false)
 }
 
+fn expected_service_port(profile: &ResolvedProfile, service: ServiceName) -> Option<u16> {
+    let key = match service {
+        ServiceName::Backend => "backend_port",
+        ServiceName::Embedding => "embedding_port",
+        ServiceName::Frontend => "frontend_port",
+        ServiceName::Db => return None,
+    };
+
+    profile.vars.get(key)?.parse().ok()
+}
+
+fn frontend_url(profile: &ResolvedProfile) -> Option<String> {
+    expected_service_port(profile, ServiceName::Frontend)
+        .map(|port| format!("http://127.0.0.1:{port}/"))
+}
+
+fn print_profile_endpoints(profile: &ResolvedProfile) {
+    eprintln!("\n=== profile endpoints ===");
+    eprintln!("profile: {}", profile.profile_name);
+
+    if let Some(port) = expected_service_port(profile, ServiceName::Frontend) {
+        if let Some(url) = frontend_url(profile) {
+            eprintln!("frontend:  {url} (port {port})");
+        }
+    }
+    if let Some(port) = expected_service_port(profile, ServiceName::Backend) {
+        eprintln!("backend:   http://127.0.0.1:{port} (port {port})");
+    }
+    if let Some(port) = expected_service_port(profile, ServiceName::Embedding) {
+        eprintln!("embedding: http://127.0.0.1:{port} (port {port})");
+    }
+    if let Some(db_name) = profile.vars.get("db_name") {
+        eprintln!("database:  {db_name}");
+    }
+}
+
+fn local_port_in_use(port: u16) -> Result<bool> {
+    match TcpListener::bind(("127.0.0.1", port)) {
+        Ok(listener) => {
+            drop(listener);
+            Ok(false)
+        }
+        Err(error) if error.kind() == ErrorKind::AddrInUse => Ok(true),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn port_usage_details(port: u16) -> Option<String> {
+    let output = Command::new("ss")
+        .args(["-ltnp", &format!("sport = :{port}")])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    if stdout.is_empty() {
+        None
+    } else {
+        Some(stdout)
+    }
+}
+
 fn shell_command(command: &str, workdir: &Path, env: &BTreeMap<String, String>) -> Command {
     let mut cmd = Command::new("bash");
     cmd.arg("-lc").arg(command).current_dir(workdir);
     cmd.envs(env);
+    cmd.process_group(0);
     cmd
 }
 
@@ -693,6 +744,31 @@ fn run_shell(command: &str, workdir: &Path, env: &BTreeMap<String, String>) -> R
     Ok(())
 }
 
+fn ensure_profile_database(paths: &Paths, profile: &ResolvedProfile) -> Result<()> {
+    if !profile.services.contains_key(&ServiceName::Db) {
+        return Ok(());
+    }
+
+    let Some(db_name) = profile.vars.get("db_name") else {
+        return Ok(());
+    };
+
+    let exists_command = format!(
+        "docker compose exec -T postgres psql -U postgres -d postgres -tAc {}",
+        shell_quote(&format!(
+            "SELECT 1 FROM pg_database WHERE datname = '{}'",
+            db_name.replace('\'', "''")
+        ))
+    );
+    let output = shell_command(&exists_command, &paths.repo_root, &profile.env).output()?;
+    if output.status.success() && String::from_utf8_lossy(&output.stdout).trim() == "1" {
+        return Ok(());
+    }
+
+    let create_command = format!("docker compose exec -T postgres createdb -U postgres {db_name}");
+    run_shell(&create_command, &paths.repo_root, &profile.env)
+}
+
 fn start_logged_command(
     paths: &Paths,
     profile: &ResolvedProfile,
@@ -701,34 +777,23 @@ fn start_logged_command(
     command: &str,
 ) -> Result<()> {
     let log_path = log_path(paths, service);
-    let fifo_path = fifo_path(paths, service);
-
-    fs::write(&log_path, "")?;
-    let _ = fs::remove_file(&fifo_path);
-    mkfifo(&fifo_path, Mode::S_IRUSR | Mode::S_IWUSR)?;
-
-    let logger_shell = format!(
-        "tee -a '{}' < '{}'",
-        log_path.display(),
-        fifo_path.display()
-    );
-    let logger = shell_command(&logger_shell, &paths.repo_root, &profile.env).spawn()?;
-
-    let fifo_writer = fs::OpenOptions::new().write(true).open(&fifo_path)?;
-    let fifo_writer_err = fifo_writer.try_clone()?;
+    let log_writer = fs::OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&log_path)?;
+    let log_writer_err = log_writer.try_clone()?;
 
     let service_child = shell_command(command, workdir, &profile.env)
-        .stdout(Stdio::from(fifo_writer))
-        .stderr(Stdio::from(fifo_writer_err))
+        .stdout(Stdio::from(log_writer))
+        .stderr(Stdio::from(log_writer_err))
         .spawn()?;
 
-    let _ = fs::remove_file(&fifo_path);
     write_pids(
         paths,
         service,
         &ServicePids {
             service_pid: service_child.id() as i32,
-            logger_pid: logger.id() as i32,
         },
     )?;
     println!(
@@ -744,10 +809,28 @@ fn stop_logged_command(paths: &Paths, service: ServiceName) -> Result<()> {
         return Ok(());
     };
 
-    let _ = kill(Pid::from_raw(pids.service_pid), Signal::SIGTERM);
-    let _ = kill(Pid::from_raw(pids.logger_pid), Signal::SIGTERM);
+    let _ = killpg(Pid::from_raw(pids.service_pid), Signal::SIGTERM);
+    wait_for_pid_exit(pids.service_pid, Duration::from_secs(3));
+
+    if pid_running(pids.service_pid) {
+        let _ = killpg(Pid::from_raw(pids.service_pid), Signal::SIGKILL);
+        wait_for_pid_exit(pids.service_pid, Duration::from_secs(1));
+    }
+
     let _ = fs::remove_file(pid_path(paths, service));
     Ok(())
+}
+
+fn wait_for_pid_exit(pid: i32, timeout: Duration) {
+    let sleep_step = Duration::from_millis(100);
+    let mut waited = Duration::ZERO;
+    while waited < timeout {
+        if !pid_running(pid) {
+            return;
+        }
+        thread::sleep(sleep_step);
+        waited += sleep_step;
+    }
 }
 
 fn service_config<'a>(
@@ -819,6 +902,27 @@ fn start_service(paths: &Paths, profile: &ResolvedProfile, service: ServiceName)
     if service_status(paths, service)? {
         println!("{} already running", service.as_str());
         return Ok(());
+    }
+
+    println!(
+        "Starting {} for profile {}",
+        service.as_str(),
+        profile.profile_name
+    );
+
+    if let Some(port) = expected_service_port(profile, service) {
+        if local_port_in_use(port)? {
+            let details = port_usage_details(port)
+                .map(|output| format!("\n\nPort usage:\n{output}"))
+                .unwrap_or_default();
+            bail!(
+                "cannot start '{}' for profile '{}': port {} is already in use{}",
+                service.as_str(),
+                profile.profile_name,
+                port,
+                details
+            );
+        }
     }
 
     let config = service_config(profile, service)?;
@@ -1039,7 +1143,7 @@ fn restore_backup(paths: &Paths, profile: &ResolvedProfile, backup: &str) -> Res
     Ok(())
 }
 
-fn main() -> Result<()> {
+fn run() -> Result<()> {
     let cli = Cli::parse();
     let repo_root = repo_root()?;
     let registry = load_registry(&repo_root)?;
@@ -1056,8 +1160,12 @@ fn main() -> Result<()> {
     match cli.command {
         CommandKind::ListProfiles => {}
         CommandKind::Start { service } => {
+            print_profile_endpoints(&profile);
             for service in dependency_order(&profile, &service)? {
                 start_service(&paths, &profile, service)?;
+                if service == ServiceName::Db {
+                    ensure_profile_database(&paths, &profile)?;
+                }
             }
         }
         CommandKind::Stop { service } => {
@@ -1068,12 +1176,16 @@ fn main() -> Result<()> {
             }
         }
         CommandKind::Restart { service } => {
+            print_profile_endpoints(&profile);
             let order = dependency_order(&profile, &service)?;
             for service in order.iter().rev().copied() {
                 stop_service(&paths, &profile, service)?;
             }
             for service in order {
                 start_service(&paths, &profile, service)?;
+                if service == ServiceName::Db {
+                    ensure_profile_database(&paths, &profile)?;
+                }
             }
         }
         CommandKind::Log { service, follow } => show_logs(&paths, &service, follow)?,
@@ -1089,4 +1201,15 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn main() -> ExitCode {
+    match run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("\n=== rimbunctl failed ===");
+            eprintln!("{error:#}");
+            ExitCode::from(1)
+        }
+    }
 }
