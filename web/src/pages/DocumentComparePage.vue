@@ -42,6 +42,11 @@ type VariantHighlight = {
   }>;
 };
 
+type MainSegment = {
+  text: string;
+  highlight: VariantHighlight | null;
+};
+
 type ExcerptSegment = {
   text: string;
   changed: boolean;
@@ -274,13 +279,13 @@ function blockHighlights(item: SectionCompareItem, block: CompareBlockDto): Vari
     const sourceText =
       variant.reference_text?.trim()
       || (fallbackDiff ? changedText(fallbackDiff.reference, "removed") : "")
-      || block.main_text.trim();
+      || "";
     const alternativeText =
       variant.text.trim()
       || (fallbackDiff ? changedText(fallbackDiff.alternative, "added") : "");
     const start = variant.reference_start ?? 0;
     const end = variant.reference_end ?? start + sourceText.length;
-    if (!sourceText || !alternativeText || end <= start) {
+    if (!alternativeText || end < start) {
       continue;
     }
 
@@ -303,19 +308,47 @@ function blockHighlights(item: SectionCompareItem, block: CompareBlockDto): Vari
   return [...highlights.values()];
 }
 
-function mainSegments(item: SectionCompareItem, block: CompareBlockDto) {
+function insertionHighlightsAt(highlights: VariantHighlight[], position: number) {
+  return highlights.filter((highlight) => highlight.start === position && highlight.end === position);
+}
+
+function makeInsertionSegment(
+  block: CompareBlockDto,
+  start: number,
+  end: number,
+  highlights: VariantHighlight[],
+): MainSegment {
+  return {
+    text: "",
+    highlight: {
+      id: `${block.anchor.block_key}-${block.block_index}-${start}-${end}-insert`,
+      sourceText: "",
+      start,
+      end,
+      variants: dedupeHighlightVariants(highlights.flatMap((highlight) => highlight.variants)),
+    },
+  };
+}
+
+function mainSegments(item: SectionCompareItem, block: CompareBlockDto): MainSegment[] {
   const highlights = blockHighlights(item, block);
   if (!highlights.length) {
     return [{ text: block.main_text, highlight: null as VariantHighlight | null }];
   }
 
-  const segments: Array<{ text: string; highlight: VariantHighlight | null }> = [];
+  const rangeHighlights = highlights.filter((highlight) => highlight.end > highlight.start);
+  const insertionHighlights = highlights.filter((highlight) => highlight.end === highlight.start);
+  const segments: MainSegment[] = [];
   const boundaries = new Set<number>([0, block.main_text.length]);
-  for (const highlight of highlights) {
+  for (const highlight of rangeHighlights) {
     boundaries.add(highlight.start);
     boundaries.add(highlight.end);
   }
   const orderedBoundaries = [...boundaries].sort((left, right) => left - right);
+
+  for (const insertion of insertionHighlightsAt(insertionHighlights, 0)) {
+    segments.push(makeInsertionSegment(block, insertion.start, insertion.end, [insertion]));
+  }
 
   for (let index = 0; index < orderedBoundaries.length - 1; index += 1) {
     const start = orderedBoundaries[index];
@@ -325,20 +358,24 @@ function mainSegments(item: SectionCompareItem, block: CompareBlockDto) {
     }
 
     const text = block.main_text.slice(start, end);
-    const overlapping = highlights.filter((highlight) => highlight.start < end && highlight.end > start);
+    const overlapping = rangeHighlights.filter((highlight) => highlight.start < end && highlight.end > start);
     if (!overlapping.length) {
       segments.push({ text, highlight: null });
-      continue;
+    } else {
+      const combinedHighlight: VariantHighlight = {
+        id: `${block.anchor.block_key}-${block.block_index}-${start}-${end}`,
+        sourceText: text,
+        start,
+        end,
+        variants: dedupeHighlightVariants(overlapping.flatMap((highlight) => highlight.variants)),
+      };
+      segments.push({ text, highlight: combinedHighlight });
     }
 
-    const combinedHighlight: VariantHighlight = {
-      id: `${block.anchor.block_key}-${block.block_index}-${start}-${end}`,
-      sourceText: text,
-      start,
-      end,
-      variants: dedupeHighlightVariants(overlapping.flatMap((highlight) => highlight.variants)),
-    };
-    segments.push({ text, highlight: combinedHighlight });
+    const insertionAtEnd = insertionHighlightsAt(insertionHighlights, end);
+    if (insertionAtEnd.length) {
+      segments.push(makeInsertionSegment(block, end, end, insertionAtEnd));
+    }
   }
 
   return segments;
@@ -659,12 +696,13 @@ watch(readerPages, (pages) => {
                       >
                         <button
                           class="inline-variant-marker"
+                          :class="{ insertion: segment.highlight.start === segment.highlight.end }"
                           type="button"
                           :aria-expanded="isVariantPanelOpen(item.section.id, segment.highlight.id)"
                           @click="handleVariantMarkerClick(item.section.id, segment.highlight.id, $event)"
                           @keyup.esc="closeVariantPanel"
                         >
-                          {{ segment.text }}
+                          {{ segment.text || "+" }}
                         </button>
 
                         <aside class="variant-popover">
@@ -937,6 +975,14 @@ watch(readerPages, (pages) => {
 .inline-variant-marker:hover,
 .inline-variant-wrap.open .inline-variant-marker {
   background: rgba(142, 75, 22, 0.24);
+}
+
+.inline-variant-marker.insertion {
+  padding: 0.04rem 0.34rem;
+  border-radius: 999px;
+  text-decoration: none;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .inline-variant-marker:focus-visible {

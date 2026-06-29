@@ -381,24 +381,10 @@ fn changed_variants_for_block(
     comparison
         .substitutions
         .iter()
-        .filter(|substitution| {
-            ranges_overlap(
-                &substitution.reference_source_range,
-                &reference_block.source_range,
-            )
-        })
+        .filter(|substitution| substitution_applies_to_block(substitution, reference_block))
         .filter_map(|substitution| {
-            let overlap_start = substitution
-                .reference_source_range
-                .start
-                .max(reference_block.source_range.start);
-            let overlap_end = substitution
-                .reference_source_range
-                .end
-                .min(reference_block.source_range.end);
-            if overlap_start >= overlap_end {
-                return None;
-            }
+            let (overlap_start, overlap_end) =
+                localized_reference_range(substitution, reference_block)?;
 
             let reference_text = comparison_set
                 .reference
@@ -406,7 +392,15 @@ fn changed_variants_for_block(
                 .get(overlap_start..overlap_end)
                 .map(ToOwned::to_owned)
                 .filter(|text| !text.is_empty());
-            let replacement_text = tokens_to_text(&substitution.replacement);
+            let replacement_text = alternative_normalized
+                .and_then(|normalized| {
+                    normalized
+                        .source
+                        .get(substitution.alternative_source_range.clone())
+                        .map(ToOwned::to_owned)
+                })
+                .filter(|text| !text.is_empty())
+                .unwrap_or_else(|| tokens_to_text(&substitution.replacement));
             let source_span = alternative_normalized.map(|normalized| {
                 source_span_dto(
                     normalized
@@ -428,6 +422,42 @@ fn changed_variants_for_block(
             })
         })
         .collect()
+}
+
+fn substitution_applies_to_block(
+    substitution: &markalign::Substitution,
+    reference_block: &markalign::ReferenceBlock,
+) -> bool {
+    let range = &substitution.reference_source_range;
+    if range.start == range.end {
+        return range.start >= reference_block.source_range.start
+            && range.start <= reference_block.source_range.end;
+    }
+    ranges_overlap(range, &reference_block.source_range)
+}
+
+fn localized_reference_range(
+    substitution: &markalign::Substitution,
+    reference_block: &markalign::ReferenceBlock,
+) -> Option<(usize, usize)> {
+    let range = &substitution.reference_source_range;
+    if range.start == range.end {
+        let position = range.start.clamp(
+            reference_block.source_range.start,
+            reference_block.source_range.end,
+        );
+        return Some((position, position));
+    }
+
+    let overlap_start = range.start.max(reference_block.source_range.start);
+    let overlap_end = range.end.min(reference_block.source_range.end);
+    if overlap_start > overlap_end {
+        return None;
+    }
+    if overlap_start == overlap_end {
+        return Some((overlap_start, overlap_end));
+    }
+    Some((overlap_start, overlap_end))
 }
 
 fn ranges_overlap(left: &std::ops::Range<usize>, right: &std::ops::Range<usize>) -> bool {
@@ -564,5 +594,35 @@ mod tests {
         assert_eq!(variants_b[0].reference_text.as_deref(), Some("Helaragon"));
         assert_eq!(variants_a[0].text, "Indonesiens größte Metalband");
         assert_eq!(variants_b[0].text, "Burgerkill");
+    }
+
+    #[test]
+    fn changed_variants_for_block_keeps_insertions() {
+        let options = Options::default();
+        let main = Document::with_id("main", "Der braune Hund jagt die schwarze Katze.");
+        let alt = Document::with_id("alt", "Der große braune Hund jagt die schwarze Katze.");
+        let normalized_alt = normalize_document(&alt, &options).expect("normalize alt");
+        let comparison_set = compare_many(&main, &[alt.clone()], &options).expect("compare");
+        let block = comparison_set
+            .reference_blocks
+            .iter()
+            .find(|block| block.kind == BlockKind::Paragraph)
+            .expect("paragraph block");
+        let comparison = comparison_set.comparison_by_id("alt").expect("comparison alt");
+
+        let variants = changed_variants_for_block(
+            &comparison_set,
+            comparison,
+            Some(&normalized_alt),
+            block,
+            uuid::Uuid::nil(),
+            1,
+        );
+
+        assert_eq!(variants.len(), 1);
+        assert_eq!(variants[0].reference_start, Some(4));
+        assert_eq!(variants[0].reference_end, Some(4));
+        assert_eq!(variants[0].reference_text, None);
+        assert!(variants[0].text.contains("große"));
     }
 }
