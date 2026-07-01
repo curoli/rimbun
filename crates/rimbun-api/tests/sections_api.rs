@@ -63,8 +63,8 @@ async fn seed_user_with_role(pool: &PgPool, role: &str) -> (uuid::Uuid, String) 
     (user_id, session_token)
 }
 
-async fn seed_privileged_user(pool: &PgPool) -> (uuid::Uuid, String) {
-    seed_user_with_role(pool, "privileged").await
+async fn seed_admin_user(pool: &PgPool) -> (uuid::Uuid, String) {
+    seed_user_with_role(pool, "admin").await
 }
 
 async fn seed_document_tree(
@@ -259,7 +259,7 @@ async fn patch_section_moves_section_and_rewrites_descendants() {
     };
     reset_schema(&pool).await;
 
-    let (user_id, session_token) = seed_privileged_user(&pool).await;
+    let (user_id, session_token) = seed_admin_user(&pool).await;
     let (document_id, parent_a, parent_b, child) = seed_document_tree(&pool, user_id).await;
     let grandchild = seed_nested_descendant(&pool, document_id, child).await;
 
@@ -324,7 +324,7 @@ async fn patch_section_rejects_move_into_own_subtree() {
     };
     reset_schema(&pool).await;
 
-    let (user_id, session_token) = seed_privileged_user(&pool).await;
+    let (user_id, session_token) = seed_admin_user(&pool).await;
     let (document_id, _parent_a, _parent_b, child) = seed_document_tree(&pool, user_id).await;
     let grandchild = seed_nested_descendant(&pool, document_id, child).await;
 
@@ -367,7 +367,7 @@ async fn patch_section_reorders_within_same_parent() {
     };
     reset_schema(&pool).await;
 
-    let (user_id, session_token) = seed_privileged_user(&pool).await;
+    let (user_id, session_token) = seed_admin_user(&pool).await;
     let (document_id, parent_a, parent_b, _child) = seed_document_tree(&pool, user_id).await;
 
     let parent_c = uuid::Uuid::new_v4();
@@ -642,7 +642,7 @@ async fn admin_can_list_all_users() {
     };
     reset_schema(&pool).await;
 
-    let (_admin_id, admin_session) = seed_privileged_user(&pool).await;
+    let (_admin_id, admin_session) = seed_admin_user(&pool).await;
     let (_normal_id, _normal_session) = seed_user_with_role(&pool, "normal").await;
 
     let app = app::build(test_config(
@@ -677,7 +677,7 @@ async fn admin_can_reset_user_password_and_user_can_login_with_it() {
     };
     reset_schema(&pool).await;
 
-    let (_admin_id, admin_session) = seed_privileged_user(&pool).await;
+    let (_admin_id, admin_session) = seed_admin_user(&pool).await;
     let (_normal_id, _normal_session) = seed_user_with_role(&pool, "normal").await;
 
     let app = app::build(test_config(
@@ -860,7 +860,7 @@ async fn moderation_hidden_and_soft_deleted_remove_visibility_and_projection() {
     };
     reset_schema(&pool).await;
 
-    let (moderator_id, moderator_session) = seed_privileged_user(&pool).await;
+    let (moderator_id, moderator_session) = seed_admin_user(&pool).await;
     let (_user_a_id, session_a) = seed_user_with_role(&pool, "normal").await;
     let (_user_b_id, session_b) = seed_user_with_role(&pool, "normal").await;
     let (_document_id, section_id) = seed_single_section_document(&pool, moderator_id).await;
@@ -1020,7 +1020,7 @@ async fn admin_can_create_and_delete_test_run_from_variant_collection() {
     };
     reset_schema(&pool).await;
 
-    let (admin_id, admin_session) = seed_privileged_user(&pool).await;
+    let (admin_id, admin_session) = seed_admin_user(&pool).await;
     let collection_id = seed_variant_collection(&pool, admin_id).await;
 
     let app = app::build(test_config(
@@ -1126,7 +1126,7 @@ async fn moderation_excluded_from_clustering_keeps_visibility_but_removes_projec
     };
     reset_schema(&pool).await;
 
-    let (moderator_id, moderator_session) = seed_privileged_user(&pool).await;
+    let (moderator_id, moderator_session) = seed_admin_user(&pool).await;
     let (_user_a_id, session_a) = seed_user_with_role(&pool, "normal").await;
     let (_user_b_id, session_b) = seed_user_with_role(&pool, "normal").await;
     let (_document_id, section_id) = seed_single_section_document(&pool, moderator_id).await;
@@ -1240,7 +1240,7 @@ async fn section_compare_requires_auth_for_authenticated_documents() {
     };
     reset_schema(&pool).await;
 
-    let (owner_id, _owner_session) = seed_privileged_user(&pool).await;
+    let (owner_id, _owner_session) = seed_admin_user(&pool).await;
     let (_document_id, section_id) = seed_single_section_document(&pool, owner_id).await;
 
     let app = app::build(test_config(

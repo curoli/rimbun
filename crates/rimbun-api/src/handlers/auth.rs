@@ -60,13 +60,6 @@ pub struct AuthResponse {
     pub session_token: String,
 }
 
-fn public_role(role: &str) -> &str {
-    match role {
-        "privileged" => "admin",
-        other => other,
-    }
-}
-
 impl From<UserRecord> for UserResponse {
     fn from(value: UserRecord) -> Self {
         Self {
@@ -74,7 +67,7 @@ impl From<UserRecord> for UserResponse {
             username: value.username,
             display_name: value.display_name,
             email: value.email,
-            role: public_role(&value.role).to_owned(),
+            role: value.role,
             created_at: value.created_at,
         }
     }

@@ -12,13 +12,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::{db::users, error::ApiError, http::extractors::require_current_user, state::AppState};
 
-fn public_role(role: &str) -> &str {
-    match role {
-        "privileged" => "admin",
-        other => other,
-    }
-}
-
 #[derive(Debug, Serialize)]
 pub struct UserListItem {
     pub id: uuid::Uuid,
@@ -36,7 +29,7 @@ impl From<users::UserRecord> for UserListItem {
             username: value.username,
             display_name: value.display_name,
             email: value.email,
-            role: public_role(&value.role).to_owned(),
+            role: value.role,
             created_at: value.created_at,
         }
     }
@@ -52,7 +45,7 @@ pub async fn list(
     headers: HeaderMap,
 ) -> Result<Json<Vec<UserListItem>>, ApiError> {
     let user = require_current_user(State(state.clone()), &headers).await?;
-    if !matches!(user.role.as_str(), "privileged" | "admin") {
+    if user.role != "admin" {
         return Err(ApiError::forbidden("admin role required"));
     }
 
@@ -70,7 +63,7 @@ pub async fn reset_password(
     Json(payload): Json<ResetPasswordRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let user = require_current_user(State(state.clone()), &headers).await?;
-    if !matches!(user.role.as_str(), "privileged" | "admin") {
+    if user.role != "admin" {
         return Err(ApiError::forbidden("admin role required"));
     }
 

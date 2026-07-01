@@ -27,7 +27,7 @@ pub async fn update(
     Json(payload): Json<UpdateModerationRequest>,
 ) -> Result<Json<moderation::ModerationRecord>, ApiError> {
     let user = require_current_user(State(state.clone()), &headers).await?;
-    if !matches!(user.role.as_str(), "privileged" | "admin") {
+    if user.role != "admin" {
         return Err(ApiError::forbidden("admin role required"));
     }
 

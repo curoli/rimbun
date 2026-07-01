@@ -6,13 +6,12 @@ use rimbun_api::{config::Config, db::users};
 
 fn usage() {
     eprintln!("Usage: cargo run -p rimbun-api --bin rimbun-set-role -- <username> <role>");
-    eprintln!("Allowed roles: normal, privileged, admin");
+    eprintln!("Allowed roles: normal, admin");
 }
 
 fn normalize_role(role: &str) -> Option<&'static str> {
     match role {
         "normal" => Some("normal"),
-        "privileged" => Some("privileged"),
         "admin" => Some("admin"),
         _ => None,
     }

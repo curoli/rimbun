@@ -53,7 +53,7 @@ pub async fn create(
 ) -> Result<Json<documents::DocumentRecord>, ApiError> {
     let user = require_current_user(State(state.clone()), &headers).await?;
 
-    if !matches!(user.role.as_str(), "privileged" | "admin") {
+    if user.role != "admin" {
         return Err(ApiError::forbidden("admin role required"));
     }
 
@@ -116,7 +116,7 @@ pub async fn update(
 ) -> Result<Json<documents::DocumentRecord>, ApiError> {
     let user = require_current_user(State(state.clone()), &headers).await?;
 
-    if !matches!(user.role.as_str(), "privileged" | "admin") {
+    if user.role != "admin" {
         return Err(ApiError::forbidden("admin role required"));
     }
 

@@ -50,7 +50,7 @@ pub struct RunCollectionResponse {
 }
 
 fn require_admin(user: &users::UserRecord) -> Result<(), ApiError> {
-    if matches!(user.role.as_str(), "privileged" | "admin") {
+    if user.role == "admin" {
         Ok(())
     } else {
         Err(ApiError::forbidden("admin role required"))

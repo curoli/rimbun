@@ -12,10 +12,18 @@ use crate::{
 pub struct UpdateSiteSettingsRequest {
     pub brand_name: String,
     pub browser_title: String,
+    pub color_scheme: String,
+}
+
+fn is_valid_color_scheme(value: &str) -> bool {
+    matches!(
+        value,
+        "amber-dawn" | "forest-paper" | "sea-glass" | "rose-evening"
+    )
 }
 
 fn require_admin(user: &users::UserRecord) -> Result<(), ApiError> {
-    if matches!(user.role.as_str(), "privileged" | "admin") {
+    if user.role == "admin" {
         Ok(())
     } else {
         Err(ApiError::forbidden("admin role required"))
@@ -46,10 +54,15 @@ pub async fn update(
         ));
     }
 
+    if !is_valid_color_scheme(payload.color_scheme.trim()) {
+        return Err(ApiError::bad_request("unknown color scheme"));
+    }
+
     let settings = site_settings::upsert(
         &state.pool,
         payload.brand_name.trim(),
         payload.browser_title.trim(),
+        payload.color_scheme.trim(),
     )
     .await
     .map_err(|err| ApiError::bad_request(err.to_string()))?;

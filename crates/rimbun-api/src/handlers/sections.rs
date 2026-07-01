@@ -46,7 +46,7 @@ pub async fn create(
     Json(payload): Json<CreateSectionRequest>,
 ) -> Result<Json<sections::SectionRecord>, ApiError> {
     let user = require_current_user(State(state.clone()), &headers).await?;
-    if !matches!(user.role.as_str(), "privileged" | "admin") {
+    if user.role != "admin" {
         return Err(ApiError::forbidden("admin role required"));
     }
 
@@ -126,7 +126,7 @@ pub async fn update(
     Json(payload): Json<UpdateSectionRequest>,
 ) -> Result<Json<sections::SectionRecord>, ApiError> {
     let user = require_current_user(State(state.clone()), &headers).await?;
-    if !matches!(user.role.as_str(), "privileged" | "admin") {
+    if user.role != "admin" {
         return Err(ApiError::forbidden("admin role required"));
     }
 
