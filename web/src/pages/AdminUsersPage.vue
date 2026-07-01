@@ -17,7 +17,7 @@ const resetStates = ref<Record<string, "idle" | "saving">>({});
 const resetMessages = ref<Record<string, string>>({});
 
 const isAdmin = computed(() =>
-  auth.user ? ["admin", "privileged"].includes(auth.user.role) : false,
+  auth.user ? auth.user.role === "admin" : false,
 );
 
 async function loadUsers() {
@@ -156,8 +156,8 @@ onMounted(async () => {
   align-items: flex-start;
   padding: 1.6rem;
   border-radius: 1.5rem;
-  background: linear-gradient(135deg, rgba(255, 248, 238, 0.98), rgba(235, 212, 184, 0.94));
-  border: 1px solid rgba(35, 24, 15, 0.08);
+  background: var(--surface-hero);
+  border: 1px solid var(--border-soft);
 }
 
 .eyebrow,
@@ -167,7 +167,7 @@ onMounted(async () => {
 }
 
 .eyebrow {
-  color: #8e4b16;
+  color: var(--accent);
   text-transform: uppercase;
   font-size: 0.82rem;
   letter-spacing: 0.08em;
@@ -181,14 +181,14 @@ onMounted(async () => {
 
 .admin-copy {
   max-width: 34ch;
-  color: #6f5947;
+  color: var(--text-secondary);
 }
 
 .admin-panel {
   padding: 1.25rem;
   border-radius: 1.25rem;
-  background: rgba(255, 252, 247, 0.94);
-  border: 1px solid rgba(35, 24, 15, 0.08);
+  background: var(--surface-panel);
+  border: 1px solid var(--border-soft);
   overflow-x: auto;
 }
 
@@ -201,7 +201,7 @@ onMounted(async () => {
 .users-table td {
   padding: 0.85rem 0.75rem;
   text-align: left;
-  border-bottom: 1px solid rgba(35, 24, 15, 0.08);
+  border-bottom: 1px solid var(--border-soft);
 }
 
 .password-reset-cell {
@@ -225,15 +225,15 @@ onMounted(async () => {
   min-width: 0;
   border: 0;
   padding: 0.7rem 0.8rem;
-  background: #fff;
-  box-shadow: inset 0 0 0 1px rgba(35, 24, 15, 0.08);
+  background: var(--surface-input);
+  box-shadow: inset 0 0 0 1px var(--border-soft);
 }
 
 .password-reset-controls button {
   border: 0;
   padding: 0.72rem 0.9rem;
-  background: #8e4b16;
-  color: white;
+  background: var(--accent);
+  color: var(--text-on-accent);
   cursor: pointer;
   white-space: nowrap;
 }
@@ -245,12 +245,12 @@ onMounted(async () => {
 
 .reset-message {
   margin: 0.45rem 0 0;
-  color: #6f5947;
+  color: var(--text-secondary);
   font-size: 0.85rem;
 }
 
 .users-table th {
-  color: #705948;
+  color: var(--text-muted);
   font-size: 0.85rem;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -258,7 +258,7 @@ onMounted(async () => {
 
 .error {
   margin: 0;
-  color: #9d2a16;
+  color: var(--danger);
 }
 
 @media (max-width: 960px) {

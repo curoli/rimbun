@@ -10,6 +10,7 @@ export type User = {
 export type SiteSettings = {
   brand_name: string;
   browser_title: string;
+  color_scheme: string;
   updated_at: string;
 };
 

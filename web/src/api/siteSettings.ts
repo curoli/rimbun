@@ -8,6 +8,7 @@ export function getSiteSettings() {
 export function updateSiteSettings(payload: {
   brand_name: string;
   browser_title: string;
+  color_scheme: string;
 }) {
   return apiRequest<SiteSettings>("/api/site-settings", {
     method: "PATCH",

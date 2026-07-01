@@ -200,8 +200,8 @@ onMounted(async () => {
   align-items: flex-start;
   padding: 1.6rem;
   border-radius: 1.5rem;
-  background: linear-gradient(135deg, rgba(255, 248, 238, 0.98), rgba(235, 212, 184, 0.94));
-  border: 1px solid rgba(35, 24, 15, 0.08);
+  background: var(--surface-hero);
+  border: 1px solid var(--border-soft);
 }
 
 .eyebrow,
@@ -213,7 +213,7 @@ onMounted(async () => {
 }
 
 .eyebrow {
-  color: #8e4b16;
+  color: var(--accent);
   text-transform: uppercase;
   font-size: 0.82rem;
   letter-spacing: 0.08em;
@@ -227,7 +227,7 @@ onMounted(async () => {
 
 .profile-copy,
 .card-copy {
-  color: #6f5947;
+  color: var(--text-secondary);
 }
 
 .profile-copy {
@@ -246,36 +246,36 @@ onMounted(async () => {
   gap: 1rem;
   padding: 1.25rem;
   border-radius: 1.25rem;
-  background: rgba(255, 252, 247, 0.94);
-  border: 1px solid rgba(35, 24, 15, 0.08);
+  background: var(--surface-panel);
+  border: 1px solid var(--border-soft);
 }
 
 label {
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
-  color: #5b4331;
+  color: var(--text-soft);
 }
 
 input {
   border: 0;
   border-radius: 0.95rem;
   padding: 0.85rem 0.95rem;
-  background: white;
-  box-shadow: inset 0 0 0 1px rgba(35, 24, 15, 0.08);
+  background: var(--surface-input);
+  box-shadow: inset 0 0 0 1px var(--border-soft);
 }
 
 input:disabled {
-  color: #705948;
-  background: #f5eee5;
+  color: var(--text-muted);
+  background: var(--accent-hover);
 }
 
 .solid {
   border: 0;
   border-radius: 0.95rem;
   padding: 0.85rem 1rem;
-  background: #8e4b16;
-  color: white;
+  background: var(--accent);
+  color: var(--text-on-accent);
   cursor: pointer;
 }
 
@@ -286,7 +286,7 @@ input:disabled {
 
 .error {
   margin: 0;
-  color: #9d2a16;
+  color: var(--danger);
 }
 
 .success {

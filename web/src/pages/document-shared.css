@@ -12,8 +12,8 @@
   align-items: end;
   padding: 1.6rem;
   border-radius: 1.5rem;
-  background: linear-gradient(135deg, rgba(255, 248, 238, 0.98), rgba(235, 212, 184, 0.94));
-  border: 1px solid rgba(35, 24, 15, 0.08);
+  background: var(--surface-hero);
+  border: 1px solid var(--border-soft);
 }
 
 .document-header-meta {
@@ -30,7 +30,7 @@
 }
 
 .eyebrow {
-  color: #8e4b16;
+  color: var(--accent);
   text-transform: uppercase;
   font-size: 0.82rem;
   letter-spacing: 0.08em;
@@ -43,7 +43,7 @@
 }
 
 .document-slug {
-  color: #6f5947;
+  color: var(--text-secondary);
 }
 
 .document-layout {

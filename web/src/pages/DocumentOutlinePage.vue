@@ -30,7 +30,7 @@ const editSectionParentId = ref<string>("root");
 const editSectionPosition = ref(0);
 
 const canManageSections = computed(() =>
-  auth.user ? ["privileged", "admin"].includes(auth.user.role) : false,
+  auth.user ? auth.user.role === "admin" : false,
 );
 const selectedSection = computed(
   () => documentData.value?.sections.find((section) => section.id === selectedSectionId.value) ?? null,
@@ -461,8 +461,8 @@ onMounted(async () => {
   gap: 0.9rem;
   padding: 1.2rem;
   border-radius: 1.2rem;
-  background: rgba(255, 252, 247, 0.94);
-  border: 1px solid rgba(35, 24, 15, 0.08);
+  background: var(--surface-panel);
+  border: 1px solid var(--border-soft);
 }
 
 .section-copy,
@@ -473,7 +473,7 @@ onMounted(async () => {
 
 .section-copy {
   margin-top: 0.35rem;
-  color: #6f5947;
+  color: var(--text-secondary);
 }
 
 .section-create-controls,
@@ -493,8 +493,8 @@ onMounted(async () => {
   border: 0;
   border-radius: 0.95rem;
   padding: 0.85rem 0.95rem;
-  background: white;
-  box-shadow: inset 0 0 0 1px rgba(35, 24, 15, 0.08);
+  background: var(--surface-input);
+  box-shadow: inset 0 0 0 1px var(--border-soft);
 }
 
 .section-create-controls input {
@@ -511,23 +511,23 @@ onMounted(async () => {
 }
 
 .section-create-controls button {
-  background: #8e4b16;
-  color: white;
+  background: var(--accent);
+  color: var(--text-on-accent);
 }
 
 .secondary-button {
-  background: #efe4d6;
-  color: #4d3322;
+  background: var(--accent-hover);
+  color: var(--accent-contrast);
 }
 
 .section-move-actions button {
-  background: #efe4d6;
-  color: #4d3322;
+  background: var(--accent-hover);
+  color: var(--accent-contrast);
 }
 
 .action-button {
   background: #4e6f3a;
-  color: white;
+  color: var(--text-on-accent);
 }
 
 .section-edit-grid {
@@ -541,14 +541,14 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
-  color: #6f5947;
+  color: var(--text-secondary);
 }
 
 .checkbox-row {
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
-  color: #6f5947;
+  color: var(--text-secondary);
 }
 
 .checkbox-inline {
@@ -558,9 +558,9 @@ onMounted(async () => {
   min-height: 3rem;
   padding: 0.85rem 0.95rem;
   border-radius: 0.95rem;
-  background: white;
-  box-shadow: inset 0 0 0 1px rgba(35, 24, 15, 0.08);
-  color: #2d1d12;
+  background: var(--surface-input);
+  box-shadow: inset 0 0 0 1px var(--border-soft);
+  color: var(--text-strong);
 }
 
 .checkbox-inline input {
@@ -573,13 +573,13 @@ onMounted(async () => {
   gap: 0.55rem;
   padding: 0.85rem 0.95rem;
   border-radius: 0.95rem;
-  background: white;
-  box-shadow: inset 0 0 0 1px rgba(35, 24, 15, 0.08);
-  color: #2d1d12;
+  background: var(--surface-input);
+  box-shadow: inset 0 0 0 1px var(--border-soft);
+  color: var(--text-strong);
 }
 
 .error {
-  color: #9d2a16;
+  color: var(--danger);
 }
 
 @media (max-width: 960px) {

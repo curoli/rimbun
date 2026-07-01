@@ -23,7 +23,7 @@ const publishState = ref<"idle" | "publishing">("idle");
 const error = ref<string | null>(null);
 
 const canManageOutline = computed(() =>
-  auth.user ? ["privileged", "admin"].includes(auth.user.role) : false,
+  auth.user ? auth.user.role === "admin" : false,
 );
 const selectedSection = computed(() => sectionView.value?.section ?? null);
 const sectionNumber = computed(() => {
@@ -248,21 +248,21 @@ onMounted(async () => {
 }
 
 .error {
-  color: #9d2a16;
+  color: var(--danger);
 }
 
 .empty-note {
   margin: 0;
   padding: 1rem 1.05rem;
   border-radius: 1rem;
-  background: rgba(255, 252, 247, 0.94);
-  color: #5e4a3b;
-  box-shadow: inset 0 0 0 1px rgba(35, 24, 15, 0.08);
+  background: var(--surface-panel);
+  color: var(--text-soft);
+  box-shadow: inset 0 0 0 1px var(--border-soft);
 }
 
 .section-number {
   margin-right: 0.55rem;
-  color: #8e4b16;
+  color: var(--accent);
   font-variant-numeric: tabular-nums;
 }
 </style>

@@ -119,15 +119,15 @@ function sectionLabel(section: SectionRecord) {
   gap: 0.5rem;
   padding: 1rem;
   border-radius: 1.25rem;
-  background: rgba(255, 253, 250, 0.92);
-  border: 1px solid rgba(35, 24, 15, 0.08);
+  background: color-mix(in srgb, var(--surface-raised) 94%, transparent);
+  border: 1px solid var(--border-soft);
 }
 
 .tree-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  color: #6f5947;
+  color: var(--text-secondary);
   font-size: 0.92rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -146,20 +146,20 @@ function sectionLabel(section: SectionRecord) {
   border-radius: 0.9rem;
   padding: 0.8rem 1rem;
   background: transparent;
-  color: #2d1d12;
+  color: var(--text-strong);
   cursor: pointer;
   transition: background 140ms ease, transform 140ms ease;
 }
 
 .tree-row:hover,
 .tree-row.active {
-  background: #f1dcc4;
+  background: var(--accent-soft);
   transform: translateX(2px);
 }
 
 .tree-toggle {
   width: 0.8rem;
-  color: #8e4b16;
+  color: var(--accent);
   font-size: 1rem;
   line-height: 1;
 }
@@ -170,7 +170,7 @@ function sectionLabel(section: SectionRecord) {
 
 .tree-number {
   min-width: 1ch;
-  color: #8e4b16;
+  color: var(--accent);
   font-variant-numeric: tabular-nums;
 }
 

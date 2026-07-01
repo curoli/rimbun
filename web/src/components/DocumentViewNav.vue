@@ -48,19 +48,19 @@ const editTarget = computed(() => (props.sectionId ? `/sections/${props.sectionI
   gap: 0.55rem;
   padding: 0.4rem;
   border-radius: 999px;
-  background: rgba(255, 252, 247, 0.78);
-  box-shadow: inset 0 0 0 1px rgba(35, 24, 15, 0.08);
+  background: color-mix(in srgb, var(--surface-panel) 84%, transparent);
+  box-shadow: inset 0 0 0 1px var(--border-soft);
 }
 
 .view-nav a {
   border-radius: 999px;
   padding: 0.65rem 0.95rem;
-  color: #5f4737;
+  color: var(--text-soft);
   text-decoration: none;
 }
 
 .view-nav a.active {
-  background: #8e4b16;
-  color: white;
+  background: var(--accent);
+  color: var(--text-on-accent);
 }
 </style>

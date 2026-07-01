@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 
 import { updateSiteSettings } from "../api/siteSettings";
+import { SITE_COLOR_SCHEMES } from "../site-theme";
 import { useAuthStore } from "../stores/auth";
 import { useSiteStore } from "../stores/site";
 
@@ -12,18 +13,24 @@ const router = useRouter();
 
 const saveState = ref<"idle" | "saving">("idle");
 const error = ref<string | null>(null);
-const form = reactive({
+const form = reactive<{
+  brand_name: string;
+  browser_title: string;
+  color_scheme: string;
+}>({
   brand_name: "",
   browser_title: "",
+  color_scheme: SITE_COLOR_SCHEMES[0].value,
 });
 
 const canManageSite = computed(() =>
-  auth.user ? ["privileged", "admin"].includes(auth.user.role) : false,
+  auth.user ? auth.user.role === "admin" : false,
 );
 
 function syncForm() {
   form.brand_name = site.brandName;
   form.browser_title = site.browserTitle;
+  form.color_scheme = site.colorScheme;
 }
 
 async function handleSave() {
@@ -33,6 +40,7 @@ async function handleSave() {
     const settings = await updateSiteSettings({
       brand_name: form.brand_name,
       browser_title: form.browser_title,
+      color_scheme: form.color_scheme,
     });
     site.apply(settings);
     syncForm();
@@ -61,7 +69,9 @@ onMounted(async () => {
         <p class="eyebrow">Admin</p>
         <h1>Site Settings</h1>
       </div>
-      <p class="admin-copy">Change the site brand shown in the header and the browser page title.</p>
+      <p class="admin-copy">
+        Change the site brand shown in the header, the browser page title, and the active color scheme.
+      </p>
     </section>
 
     <section class="settings-panel">
@@ -75,6 +85,15 @@ onMounted(async () => {
       <label>
         <span>Browser title</span>
         <input v-model="form.browser_title" type="text" />
+      </label>
+
+      <label>
+        <span>Color scheme</span>
+        <select v-model="form.color_scheme">
+          <option v-for="scheme in SITE_COLOR_SCHEMES" :key="scheme.value" :value="scheme.value">
+            {{ scheme.label }}: {{ scheme.description }}
+          </option>
+        </select>
       </label>
 
       <div class="action-row">
@@ -101,8 +120,8 @@ onMounted(async () => {
   align-items: flex-start;
   padding: 1.6rem;
   border-radius: 1.5rem;
-  background: linear-gradient(135deg, rgba(255, 248, 238, 0.98), rgba(235, 212, 184, 0.94));
-  border: 1px solid rgba(35, 24, 15, 0.08);
+  background: var(--surface-hero);
+  border: 1px solid var(--border-soft);
 }
 
 .eyebrow,
@@ -112,7 +131,7 @@ onMounted(async () => {
 }
 
 .eyebrow {
-  color: #8e4b16;
+  color: var(--accent);
   text-transform: uppercase;
   font-size: 0.82rem;
   letter-spacing: 0.08em;
@@ -126,7 +145,7 @@ onMounted(async () => {
 
 .admin-copy {
   max-width: 34ch;
-  color: #6f5947;
+  color: var(--text-secondary);
 }
 
 .settings-panel {
@@ -135,27 +154,29 @@ onMounted(async () => {
   gap: 0.9rem;
   padding: 1.1rem;
   border-radius: 1rem;
-  background: rgba(255, 252, 247, 0.94);
-  border: 1px solid rgba(35, 24, 15, 0.08);
+  background: var(--surface-panel);
+  border: 1px solid var(--border-soft);
 }
 
 label {
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
-  color: #5b4331;
+  color: var(--text-secondary);
 }
 
 input,
+select,
 button {
   border-radius: 0.75rem;
   font: inherit;
 }
 
-input {
-  border: 1px solid rgba(35, 24, 15, 0.14);
+input,
+select {
+  border: 1px solid var(--border-strong);
   padding: 0.7rem 0.85rem;
-  background: white;
+  background: var(--surface-input);
 }
 
 .action-row {
@@ -166,14 +187,14 @@ input {
 button {
   border: 0;
   padding: 0.72rem 0.95rem;
-  background: #8e4b16;
-  color: white;
+  background: var(--accent);
+  color: var(--text-on-accent);
   cursor: pointer;
 }
 
 .error {
   margin: 0;
-  color: #9d2a16;
+  color: var(--danger);
 }
 
 @media (max-width: 960px) {

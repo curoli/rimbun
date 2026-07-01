@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 
 import * as siteSettingsApi from "../api/siteSettings";
 import type { SiteSettings } from "../api/types";
+import { DEFAULT_SITE_COLOR_SCHEME, isSiteColorScheme } from "../site-theme";
 
 type SiteState = {
   settings: SiteSettings | null;
@@ -13,14 +14,18 @@ type SiteState = {
 const DEFAULT_SETTINGS: SiteSettings = {
   brand_name: "Rimbun",
   browser_title: "Rimbun",
+  color_scheme: DEFAULT_SITE_COLOR_SCHEME,
   updated_at: "",
 };
 
-function applyDocumentTitle(settings: SiteSettings | null) {
+function applySiteSettings(settings: SiteSettings | null) {
   if (typeof document === "undefined") {
     return;
   }
   document.title = settings?.browser_title || DEFAULT_SETTINGS.browser_title;
+  const theme = settings?.color_scheme;
+  document.documentElement.dataset.rimbunTheme =
+    theme && isSiteColorScheme(theme) ? theme : DEFAULT_SITE_COLOR_SCHEME;
 }
 
 export const useSiteStore = defineStore("site", {
@@ -37,6 +42,10 @@ export const useSiteStore = defineStore("site", {
     browserTitle(state) {
       return state.settings?.browser_title || DEFAULT_SETTINGS.browser_title;
     },
+    colorScheme(state) {
+      const value = state.settings?.color_scheme;
+      return value && isSiteColorScheme(value) ? value : DEFAULT_SITE_COLOR_SCHEME;
+    },
   },
   actions: {
     async load() {
@@ -48,14 +57,14 @@ export const useSiteStore = defineStore("site", {
       try {
         this.settings = await siteSettingsApi.getSiteSettings();
         this.hydrated = true;
-        applyDocumentTitle(this.settings);
+        applySiteSettings(this.settings);
       } catch (error) {
         this.error = error instanceof Error ? error.message : "Failed to load site settings";
         this.hydrated = true;
         if (!this.settings) {
           this.settings = DEFAULT_SETTINGS;
         }
-        applyDocumentTitle(this.settings);
+        applySiteSettings(this.settings);
       } finally {
         this.isLoading = false;
       }
@@ -63,7 +72,7 @@ export const useSiteStore = defineStore("site", {
     apply(settings: SiteSettings) {
       this.settings = settings;
       this.hydrated = true;
-      applyDocumentTitle(settings);
+      applySiteSettings(settings);
     },
   },
 });

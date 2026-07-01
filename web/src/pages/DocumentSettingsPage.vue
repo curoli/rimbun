@@ -24,7 +24,7 @@ const form = reactive({
 });
 
 const canManageDocument = computed(() =>
-  auth.user ? ["privileged", "admin"].includes(auth.user.role) : false,
+  auth.user ? auth.user.role === "admin" : false,
 );
 
 function syncForm() {
@@ -188,8 +188,8 @@ onMounted(async () => {
   gap: 1rem;
   padding: 1.25rem;
   border-radius: 1.25rem;
-  background: rgba(255, 252, 247, 0.94);
-  border: 1px solid rgba(35, 24, 15, 0.08);
+  background: var(--surface-panel);
+  border: 1px solid var(--border-soft);
 }
 
 .panel-heading {
@@ -206,7 +206,7 @@ onMounted(async () => {
 
 .panel-heading p {
   margin-top: 0.35rem;
-  color: #6b5646;
+  color: var(--text-secondary);
 }
 
 .form-grid {
@@ -219,7 +219,7 @@ label {
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
-  color: #5b4331;
+  color: var(--text-soft);
 }
 
 input,
@@ -233,20 +233,20 @@ input,
 select {
   border: 0;
   padding: 0.8rem 0.9rem;
-  background: #fff;
-  box-shadow: inset 0 0 0 1px rgba(35, 24, 15, 0.08);
+  background: var(--surface-input);
+  box-shadow: inset 0 0 0 1px var(--border-soft);
 }
 
 button {
   border: 0;
   padding: 0.85rem 1rem;
-  background: #8e4b16;
-  color: white;
+  background: var(--accent);
+  color: var(--text-on-accent);
   cursor: pointer;
 }
 
 .error {
-  color: #9d2a16;
+  color: var(--danger);
   margin: 0;
 }
 

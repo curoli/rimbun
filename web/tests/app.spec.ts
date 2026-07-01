@@ -311,7 +311,7 @@ test("document page can save drafts and publish updated section versions", async
   await expect(page.getByText("Bob @bob")).toBeVisible();
 });
 
-test("privileged structure controls create and move sections with computed targets", async ({ page }) => {
+test("admin structure controls create and move sections with computed targets", async ({ page }) => {
   const documentSections = [
     {
       id: "root-a",
@@ -369,7 +369,7 @@ test("privileged structure controls create and move sections with computed targe
           username: "editor",
           display_name: "Editor",
           email: "editor@example.test",
-          role: "privileged",
+          role: "admin",
           created_at: "2026-05-05T12:00:00Z",
         }),
       });

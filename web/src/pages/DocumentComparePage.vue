@@ -67,7 +67,7 @@ const isLoadingCompares = ref(false);
 const error = ref<string | null>(null);
 
 const canManageOutline = computed(() =>
-  auth.user ? ["privileged", "admin"].includes(auth.user.role) : false,
+  auth.user ? auth.user.role === "admin" : false,
 );
 
 const orderedSections = computed(() => {
@@ -770,7 +770,7 @@ watch(readerPages, (pages) => {
 
 .compare-panel,
 .variant-card {
-  border: 1px solid rgba(35, 24, 15, 0.08);
+  border: 1px solid var(--border-soft);
 }
 
 .compare-panel {
@@ -779,7 +779,7 @@ watch(readerPages, (pages) => {
   gap: 1rem;
   padding: 1.25rem;
   border-radius: 1.25rem;
-  background: rgba(255, 252, 247, 0.94);
+  background: var(--surface-panel);
 }
 
 .compare-section-header,
@@ -811,7 +811,7 @@ watch(readerPages, (pages) => {
   gap: 0.85rem;
   align-items: center;
   padding-bottom: 0.25rem;
-  border-bottom: 1px solid rgba(35, 24, 15, 0.08);
+  border-bottom: 1px solid var(--border-soft);
 }
 
 .page-nav > button,
@@ -824,8 +824,8 @@ watch(readerPages, (pages) => {
 }
 
 .page-nav > button {
-  background: #efe4d6;
-  color: #4d3322;
+  background: var(--accent-hover);
+  color: var(--accent-contrast);
 }
 
 .page-nav > button:disabled {
@@ -841,14 +841,14 @@ watch(readerPages, (pages) => {
 }
 
 .page-pill {
-  background: rgba(255, 255, 255, 0.72);
-  color: #4d3322;
+  background: color-mix(in srgb, var(--surface-input) 72%, transparent);
+  color: var(--accent-contrast);
   white-space: nowrap;
 }
 
 .page-pill.active {
-  background: #8e4b16;
-  color: white;
+  background: var(--accent);
+  color: var(--text-on-accent);
 }
 
 .compare-section {
@@ -856,7 +856,7 @@ watch(readerPages, (pages) => {
   flex-direction: column;
   gap: 1rem;
   padding-top: 2rem;
-  border-top: 1px solid rgba(35, 24, 15, 0.1);
+  border-top: 1px solid color-mix(in srgb, var(--border-medium) 84%, transparent);
 }
 
 .compare-section:first-child {
@@ -879,26 +879,26 @@ watch(readerPages, (pages) => {
   flex-wrap: wrap;
   gap: 0.65rem;
   min-height: 1.8rem;
-  color: #6f5947;
+  color: var(--text-secondary);
   font-size: 0.88rem;
 }
 
 .reader-badge {
   padding: 0.35rem 0.6rem;
   border-radius: 999px;
-  background: #f1dcc4;
-  color: #6f5947;
+  background: var(--accent-soft);
+  color: var(--text-secondary);
   font-size: 0.88rem;
 }
 
 .edit-link {
-  color: #8e4b16;
+  color: var(--accent);
   text-decoration: none;
 }
 
 .section-number {
   margin-right: 0.55rem;
-  color: #8e4b16;
+  color: var(--accent);
   font-variant-numeric: tabular-nums;
 }
 
@@ -913,13 +913,13 @@ watch(readerPages, (pages) => {
 
 .support-pill {
   padding: 0.32rem 0.62rem;
-  background: rgba(142, 75, 22, 0.1);
-  color: #8e4b16;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
 }
 
 .rank-marker {
   min-width: 1.35rem;
-  color: #8e4b16;
+  color: var(--accent);
   font-variant-numeric: tabular-nums;
 }
 
@@ -934,7 +934,7 @@ watch(readerPages, (pages) => {
 }
 
 .block-card.changed {
-  background: linear-gradient(90deg, rgba(142, 75, 22, 0.08), rgba(142, 75, 22, 0));
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 8%, transparent), transparent);
 }
 
 .main-block-text {
@@ -942,7 +942,7 @@ watch(readerPages, (pages) => {
   white-space: pre-wrap;
   font-family: inherit;
   line-height: 1.65;
-  color: #22150d;
+  color: var(--text-strong);
 }
 
 .inline-variant-wrap {
@@ -962,19 +962,19 @@ watch(readerPages, (pages) => {
   border: 0;
   border-radius: 0.25rem;
   padding: 0.04rem 0.16rem;
-  background: rgba(142, 75, 22, 0.16);
-  color: #8e4b16;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
   font: inherit;
   text-decoration: underline;
   text-decoration-thickness: 0.12em;
   text-underline-offset: 0.16em;
-  text-decoration-color: rgba(142, 75, 22, 0.42);
+  text-decoration-color: color-mix(in srgb, var(--accent) 42%, transparent);
   cursor: pointer;
 }
 
 .inline-variant-marker:hover,
 .inline-variant-wrap.open .inline-variant-marker {
-  background: rgba(142, 75, 22, 0.24);
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
 }
 
 .inline-variant-marker.insertion {
@@ -986,7 +986,7 @@ watch(readerPages, (pages) => {
 }
 
 .inline-variant-marker:focus-visible {
-  outline: 2px solid rgba(142, 75, 22, 0.5);
+  outline: 2px solid color-mix(in srgb, var(--accent) 50%, transparent);
   outline-offset: 3px;
 }
 
@@ -999,11 +999,11 @@ watch(readerPages, (pages) => {
   max-height: min(70vh, 44rem);
   overflow: auto;
   padding: 0.9rem;
-  border: 1px solid rgba(35, 24, 15, 0.12);
+  border: 1px solid var(--border-medium);
   border-radius: 0.8rem;
-  background-color: #fffdf9;
+  background-color: var(--surface-raised);
   box-shadow: 0 1.5rem 3rem rgba(35, 24, 15, 0.18);
-  color: #22150d;
+  color: var(--text-strong);
   opacity: 1;
   z-index: 1001;
 }
@@ -1024,7 +1024,7 @@ watch(readerPages, (pages) => {
   gap: 1rem;
   align-items: baseline;
   padding-bottom: 0.4rem;
-  border-bottom: 1px solid rgba(35, 24, 15, 0.08);
+  border-bottom: 1px solid var(--border-soft);
 }
 
 .popover-close {
@@ -1032,10 +1032,10 @@ watch(readerPages, (pages) => {
   width: 1.8rem;
   height: 1.8rem;
   place-items: center;
-  border: 1px solid rgba(35, 24, 15, 0.12);
+  border: 1px solid var(--border-medium);
   border-radius: 999px;
-  background: white;
-  color: #6f5947;
+  background: var(--surface-input);
+  color: var(--text-secondary);
   cursor: pointer;
   font: inherit;
   line-height: 1;
@@ -1049,7 +1049,7 @@ watch(readerPages, (pages) => {
 
 .block-kind {
   text-transform: capitalize;
-  color: #8e4b16;
+  color: var(--accent);
   font-size: 0.8rem;
 }
 
@@ -1059,7 +1059,7 @@ watch(readerPages, (pages) => {
   gap: 0.55rem;
   padding: 0.8rem;
   border-radius: 0.55rem;
-  background: #fff8ef;
+  background: var(--surface-raised);
 }
 
 .variant-meta {
@@ -1072,7 +1072,7 @@ watch(readerPages, (pages) => {
 .variant-replacement {
   margin: 0;
   white-space: pre-wrap;
-  color: #22150d;
+  color: var(--text-strong);
   line-height: 1.5;
 }
 
@@ -1085,7 +1085,7 @@ watch(readerPages, (pages) => {
 .variant-delta {
   padding: 0 0.14rem;
   border-radius: 0.22rem;
-  background: rgba(142, 75, 22, 0.16);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
   color: inherit;
 }
 

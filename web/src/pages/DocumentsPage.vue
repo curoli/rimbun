@@ -18,7 +18,7 @@ const createForm = reactive({
 });
 
 const canManageDocuments = computed(() =>
-  auth.user ? ["privileged", "admin"].includes(auth.user.role) : false,
+  auth.user ? auth.user.role === "admin" : false,
 );
 
 async function loadDocuments() {
@@ -143,7 +143,7 @@ onMounted(() => {
 
 .eyebrow {
   margin: 0 0 0.5rem;
-  color: #8e4b16;
+  color: var(--accent);
   text-transform: uppercase;
   letter-spacing: 0.08em;
   font-size: 0.82rem;
@@ -152,8 +152,8 @@ onMounted(() => {
 .documents-panel {
   padding: 1.4rem;
   border-radius: 1.35rem;
-  background: rgba(255, 252, 247, 0.94);
-  border: 1px solid rgba(35, 24, 15, 0.08);
+  background: var(--surface-panel);
+  border: 1px solid var(--border-soft);
 }
 
 .create-form {
@@ -162,8 +162,8 @@ onMounted(() => {
   gap: 1rem;
   padding: 1.2rem;
   border-radius: 1.35rem;
-  background: linear-gradient(180deg, rgba(252, 246, 238, 0.96), rgba(243, 230, 214, 0.94));
-  border: 1px solid rgba(35, 24, 15, 0.08);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--surface-panel) 88%, var(--surface-input)), color-mix(in srgb, var(--accent-soft) 40%, var(--surface-panel)));
+  border: 1px solid var(--border-soft);
 }
 
 .form-header {
@@ -179,7 +179,7 @@ onMounted(() => {
 }
 
 .form-header p {
-  color: #6b5646;
+  color: var(--text-secondary);
   margin-top: 0.35rem;
 }
 
@@ -193,7 +193,7 @@ label {
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
-  color: #5b4331;
+  color: var(--text-soft);
 }
 
 input,
@@ -201,16 +201,16 @@ select {
   border: 0;
   border-radius: 0.95rem;
   padding: 0.8rem 0.9rem;
-  background: #fff;
-  box-shadow: inset 0 0 0 1px rgba(35, 24, 15, 0.08);
+  background: var(--surface-input);
+  box-shadow: inset 0 0 0 1px var(--border-soft);
 }
 
 .create-button {
   border: 0;
   border-radius: 0.95rem;
   padding: 0.85rem 1rem;
-  background: #8e4b16;
-  color: white;
+  background: var(--accent);
+  color: var(--text-on-accent);
   cursor: pointer;
 }
 
@@ -227,8 +227,8 @@ select {
   gap: 0.65rem;
   padding: 1.2rem;
   border-radius: 1.2rem;
-  background: #fffaf4;
-  border: 1px solid rgba(35, 24, 15, 0.08);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-soft);
 }
 
 .document-card h2,
@@ -237,37 +237,37 @@ select {
 }
 
 .document-card p {
-  color: #6f5947;
+  color: var(--text-secondary);
 }
 
 .visibility {
-  color: #8e4b16;
+  color: var(--accent);
   text-transform: uppercase;
   font-size: 0.78rem;
   letter-spacing: 0.08em;
 }
 
 .error {
-  color: #9d2a16;
+  color: var(--danger);
 }
 
 .about-note {
   border-radius: 1rem;
-  background: rgba(255, 252, 247, 0.88);
-  border: 1px solid rgba(35, 24, 15, 0.08);
+  background: color-mix(in srgb, var(--surface-panel) 94%, transparent);
+  border: 1px solid var(--border-soft);
   padding: 0.95rem 1.1rem;
 }
 
 .about-note summary {
   cursor: pointer;
   font-weight: 600;
-  color: #8e4b16;
+  color: var(--accent);
 }
 
 .about-copy {
   margin-top: 0.85rem;
   max-width: 60ch;
-  color: #5e4a3b;
+  color: var(--text-soft);
 }
 
 .about-copy p {
@@ -275,7 +275,7 @@ select {
 }
 
 .repo-link {
-  color: #8e4b16;
+  color: var(--accent);
   text-decoration: underline;
   text-underline-offset: 0.16em;
 }

@@ -35,7 +35,7 @@ const openEntryEditors = ref<Record<string, boolean>>({});
 const newEntryMarkdown = ref("");
 
 const isAdmin = computed(() =>
-  auth.user ? ["admin", "privileged"].includes(auth.user.role) : false,
+  auth.user ? auth.user.role === "admin" : false,
 );
 
 const selectedCollection = computed(
@@ -464,8 +464,8 @@ onMounted(async () => {
   align-items: flex-start;
   padding: 1.6rem;
   border-radius: 1.5rem;
-  background: linear-gradient(135deg, rgba(255, 248, 238, 0.98), rgba(235, 212, 184, 0.94));
-  border: 1px solid rgba(35, 24, 15, 0.08);
+  background: var(--surface-hero);
+  border: 1px solid var(--border-soft);
 }
 
 .eyebrow,
@@ -478,7 +478,7 @@ onMounted(async () => {
 }
 
 .eyebrow {
-  color: #8e4b16;
+  color: var(--accent);
   text-transform: uppercase;
   font-size: 0.82rem;
   letter-spacing: 0.08em;
@@ -492,7 +492,7 @@ onMounted(async () => {
 
 .admin-copy {
   max-width: 34ch;
-  color: #6f5947;
+  color: var(--text-secondary);
 }
 
 .lab-layout {
@@ -515,8 +515,8 @@ onMounted(async () => {
   gap: 0.85rem;
   padding: 1.1rem;
   border-radius: 1rem;
-  background: rgba(255, 252, 247, 0.94);
-  border: 1px solid rgba(35, 24, 15, 0.08);
+  background: var(--surface-panel);
+  border: 1px solid var(--border-soft);
 }
 
 .panel-heading,
@@ -532,7 +532,7 @@ onMounted(async () => {
 .collection-button small,
 .entry-button small,
 .run-card small {
-  color: #6f5947;
+  color: var(--text-secondary);
 }
 
 .collection-list,
@@ -548,10 +548,10 @@ onMounted(async () => {
   gap: 0.2rem;
   align-items: flex-start;
   text-align: left;
-  border: 1px solid rgba(35, 24, 15, 0.08);
+  border: 1px solid var(--border-soft);
   border-radius: 0.75rem;
   padding: 0.85rem;
-  background: white;
+  background: var(--surface-input);
   cursor: pointer;
 }
 
@@ -565,7 +565,7 @@ label,
 }
 
 .collection-button.active {
-  background: #f1dcc4;
+  background: var(--accent-soft);
   border-color: rgba(142, 75, 22, 0.22);
 }
 
@@ -578,7 +578,7 @@ label,
   padding: 1rem;
   border-radius: 0.9rem;
   background: rgba(250, 242, 232, 0.5);
-  border: 1px solid rgba(35, 24, 15, 0.08);
+  border: 1px solid var(--border-soft);
 }
 
 .entry-card-new {
@@ -597,16 +597,16 @@ label,
 }
 
 .entry-heading small {
-  color: #6f5947;
+  color: var(--text-secondary);
 }
 
 .entry-preview {
   margin: 0;
   padding: 0.85rem 0.95rem;
   border-radius: 0.75rem;
-  background: white;
-  border: 1px solid rgba(35, 24, 15, 0.08);
-  color: #2f241b;
+  background: var(--surface-input);
+  border: 1px solid var(--border-soft);
+  color: var(--text-strong);
   white-space: pre-wrap;
   word-break: break-word;
   font: inherit;
@@ -622,17 +622,17 @@ button,
 
 input,
 textarea {
-  border: 1px solid rgba(35, 24, 15, 0.14);
+  border: 1px solid var(--border-strong);
   padding: 0.7rem 0.85rem;
-  background: white;
+  background: var(--surface-input);
 }
 
 button,
 .link-button {
   border: 0;
   padding: 0.72rem 0.95rem;
-  background: #8e4b16;
-  color: white;
+  background: var(--accent);
+  color: var(--text-on-accent);
   cursor: pointer;
   text-decoration: none;
 }
@@ -642,24 +642,24 @@ button,
 }
 
 button.secondary {
-  background: #eadac8;
+  background: var(--accent-soft);
   color: #58351a;
 }
 
 button.danger {
-  background: #9d2a16;
+  background: var(--danger);
 }
 
 .run-card {
   padding: 0.85rem;
   border-radius: 0.75rem;
-  border: 1px solid rgba(35, 24, 15, 0.08);
-  background: white;
+  border: 1px solid var(--border-soft);
+  background: var(--surface-input);
 }
 
 .error {
   margin: 0;
-  color: #9d2a16;
+  color: var(--danger);
 }
 
 @media (max-width: 1100px) {

@@ -65,8 +65,8 @@ const emit = defineEmits<{
   gap: 1rem;
   padding: 1.3rem;
   border-radius: 1.4rem;
-  background: linear-gradient(180deg, rgba(255, 251, 245, 0.98), rgba(249, 241, 231, 0.96));
-  border: 1px solid rgba(35, 24, 15, 0.08);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--surface-input) 92%, var(--surface-panel)), color-mix(in srgb, var(--accent-soft) 30%, var(--surface-panel)));
+  border: 1px solid var(--border-soft);
 }
 
 .editor-header {
@@ -82,7 +82,7 @@ const emit = defineEmits<{
 }
 
 .eyebrow {
-  color: #8e4b16;
+  color: var(--accent);
   font-size: 0.8rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -106,12 +106,12 @@ const emit = defineEmits<{
   gap: 0.35rem;
   padding: 0.95rem 1rem;
   border-radius: 1rem;
-  background: rgba(255, 255, 255, 0.7);
-  box-shadow: inset 0 0 0 1px rgba(35, 24, 15, 0.08);
+  background: color-mix(in srgb, var(--surface-input) 70%, transparent);
+  box-shadow: inset 0 0 0 1px var(--border-soft);
 }
 
 .status-card span {
-  color: #705948;
+  color: var(--text-muted);
   font-size: 0.78rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -119,11 +119,11 @@ const emit = defineEmits<{
 
 .status-card strong {
   font-size: 1rem;
-  color: #2d1d12;
+  color: var(--text-strong);
 }
 
 .status-card.accent {
-  background: #f1dcc4;
+  background: var(--accent-soft);
 }
 
 .ghost,
@@ -135,13 +135,13 @@ const emit = defineEmits<{
 }
 
 .ghost {
-  background: #efe4d6;
-  color: #4d3322;
+  background: var(--accent-hover);
+  color: var(--accent-contrast);
 }
 
 .solid {
-  background: #8e4b16;
-  color: white;
+  background: var(--accent);
+  color: var(--text-on-accent);
 }
 
 .ghost:disabled,
@@ -158,26 +158,26 @@ textarea {
   outline: none;
   border-radius: 1rem;
   padding: 1rem;
-  background: rgba(255, 255, 255, 0.85);
-  color: #271b12;
+  background: color-mix(in srgb, var(--surface-input) 85%, transparent);
+  color: var(--text-strong);
   font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
   font-size: 0.96rem;
   line-height: 1.55;
-  box-shadow: inset 0 0 0 1px rgba(35, 24, 15, 0.08);
+  box-shadow: inset 0 0 0 1px var(--border-soft);
 }
 
 .error {
   margin: 0;
-  color: #9d2a16;
+  color: var(--danger);
 }
 
 .structure-note {
   margin: 0;
   padding: 1rem 1.05rem;
   border-radius: 1rem;
-  background: rgba(255, 255, 255, 0.72);
-  box-shadow: inset 0 0 0 1px rgba(35, 24, 15, 0.08);
-  color: #5e4a3b;
+  background: color-mix(in srgb, var(--surface-input) 72%, transparent);
+  box-shadow: inset 0 0 0 1px var(--border-soft);
+  color: var(--text-soft);
 }
 
 @media (max-width: 760px) {

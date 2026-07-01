@@ -156,7 +156,7 @@ function authorLabel(submission: SubmissionRecord) {
 }
 
 .submissions-header p {
-  color: #705948;
+  color: var(--text-muted);
   margin-top: 0.35rem;
 }
 
@@ -172,15 +172,15 @@ function authorLabel(submission: SubmissionRecord) {
 }
 
 .group-heading p {
-  color: #705948;
+  color: var(--text-muted);
   margin-top: 0.3rem;
 }
 
 .submission-card {
   padding: 1rem;
   border-radius: 1.15rem;
-  background: rgba(255, 252, 247, 0.9);
-  border: 1px solid rgba(35, 24, 15, 0.08);
+  background: color-mix(in srgb, var(--surface-panel) 96%, transparent);
+  border: 1px solid var(--border-soft);
 }
 
 .submission-card.selected {
@@ -189,7 +189,7 @@ function authorLabel(submission: SubmissionRecord) {
 }
 
 .main-card {
-  background: linear-gradient(180deg, rgba(255, 250, 243, 0.98), rgba(247, 232, 208, 0.98));
+  background: linear-gradient(180deg, color-mix(in srgb, var(--surface-input) 92%, var(--surface-panel)), color-mix(in srgb, var(--accent-soft) 34%, var(--surface-panel)));
 }
 
 .muted-card {
@@ -212,7 +212,7 @@ function authorLabel(submission: SubmissionRecord) {
 
 .meta-stack strong {
   font-size: 0.95rem;
-  color: #2d1d12;
+  color: var(--text-strong);
 }
 
 .badge {
@@ -220,8 +220,8 @@ function authorLabel(submission: SubmissionRecord) {
   align-items: center;
   padding: 0.2rem 0.55rem;
   border-radius: 999px;
-  background: #f1dcc4;
-  color: #8e4b16;
+  background: var(--accent-soft);
+  color: var(--accent);
   font-size: 0.78rem;
   font-weight: 700;
   text-transform: uppercase;
@@ -230,7 +230,7 @@ function authorLabel(submission: SubmissionRecord) {
 
 .main-badge {
   background: #d36b19;
-  color: white;
+  color: var(--text-on-accent);
 }
 
 pre {
@@ -247,7 +247,7 @@ pre {
   border-radius: 0.85rem;
   padding: 0.7rem 1rem;
   background: #f4efe8;
-  color: #442d1e;
+  color: var(--text-strong);
   cursor: pointer;
 }
 </style>

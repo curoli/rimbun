@@ -116,18 +116,16 @@ watch(
 .auth-form-panel {
   border-radius: 1.6rem;
   padding: 2rem;
-  border: 1px solid rgba(35, 24, 15, 0.08);
+  border: 1px solid var(--border-soft);
 }
 
 .auth-copy {
-  background:
-    linear-gradient(160deg, rgba(142, 75, 22, 0.9), rgba(196, 130, 49, 0.76)),
-    #8e4b16;
-  color: #fff8ef;
+  background: var(--hero-gradient);
+  color: var(--text-on-accent);
 }
 
 .auth-form-panel {
-  background: rgba(255, 252, 247, 0.95);
+  background: var(--surface-panel);
 }
 
 .eyebrow {
@@ -148,7 +146,7 @@ watch(
   gap: 0.4rem;
   padding: 0.3rem;
   border-radius: 999px;
-  background: #f0e4d7;
+  background: var(--surface-toggle);
 }
 
 .mode-toggle button {
@@ -160,7 +158,7 @@ watch(
 }
 
 .mode-toggle button.active {
-  background: white;
+  background: var(--surface-input);
 }
 
 .auth-form {
@@ -174,28 +172,28 @@ label {
   display: flex;
   flex-direction: column;
   gap: 0.45rem;
-  color: #563f2e;
+  color: var(--text-soft);
 }
 
 input {
   border: 0;
   border-radius: 0.95rem;
   padding: 0.85rem 1rem;
-  background: #fff;
-  box-shadow: inset 0 0 0 1px rgba(35, 24, 15, 0.08);
+  background: var(--surface-input);
+  box-shadow: inset 0 0 0 1px var(--border-soft);
 }
 
 .auth-error {
   margin: 0;
-  color: #9d2a16;
+  color: var(--danger);
 }
 
 .submit {
   border: 0;
   border-radius: 1rem;
   padding: 0.9rem 1rem;
-  background: #8e4b16;
-  color: white;
+  background: var(--accent);
+  color: var(--text-on-accent);
   cursor: pointer;
 }
 
