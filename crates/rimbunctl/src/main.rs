@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
+    env,
     fs,
     io::ErrorKind,
     net::TcpListener,
@@ -29,15 +30,14 @@ const SERVICE_ORDER: [ServiceName; 4] = [
 
 #[derive(Debug, Parser)]
 #[command(name = "rimbunctl")]
-struct Cli {
+struct ProfileCli {
     profile: String,
     #[command(subcommand)]
-    command: CommandKind,
+    command: ProfileCommandKind,
 }
 
 #[derive(Debug, Subcommand)]
-enum CommandKind {
-    ListProfiles,
+enum ProfileCommandKind {
     Start {
         #[arg(default_value = "all")]
         service: ServiceTarget,
@@ -70,6 +70,18 @@ enum CommandKind {
         username: String,
         new_password: String,
     },
+}
+
+#[derive(Debug, Parser)]
+#[command(name = "rimbunctl")]
+struct RootCli {
+    #[command(subcommand)]
+    command: RootCommandKind,
+}
+
+#[derive(Debug, Subcommand)]
+enum RootCommandKind {
+    ListProfiles,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
@@ -724,6 +736,39 @@ fn port_usage_details(port: u16) -> Option<String> {
     }
 }
 
+fn profiles_using_service_port(
+    registry: &ConfigRegistry,
+    current_profile: &ResolvedProfile,
+    service: ServiceName,
+    port: u16,
+) -> Vec<String> {
+    let mut matches = Vec::new();
+
+    for profile_name in registry.profiles.keys() {
+        if profile_name == &current_profile.profile_name {
+            continue;
+        }
+
+        let Ok(profile) = resolve_profile(registry, profile_name) else {
+            continue;
+        };
+
+        if expected_service_port(&profile, service) != Some(port) {
+            continue;
+        }
+
+        let Ok(paths) = state_paths(&profile.state_namespace) else {
+            continue;
+        };
+
+        if service_status(&paths, service).unwrap_or(false) {
+            matches.push(profile.profile_name);
+        }
+    }
+
+    matches
+}
+
 fn shell_command(command: &str, workdir: &Path, env: &BTreeMap<String, String>) -> Command {
     let mut cmd = Command::new("bash");
     cmd.arg("-lc").arg(command).current_dir(workdir);
@@ -898,7 +943,12 @@ fn dependency_order(profile: &ResolvedProfile, target: &ServiceTarget) -> Result
     Ok(ordered)
 }
 
-fn start_service(paths: &Paths, profile: &ResolvedProfile, service: ServiceName) -> Result<()> {
+fn start_service(
+    registry: &ConfigRegistry,
+    paths: &Paths,
+    profile: &ResolvedProfile,
+    service: ServiceName,
+) -> Result<()> {
     if service_status(paths, service)? {
         println!("{} already running", service.as_str());
         return Ok(());
@@ -912,14 +962,25 @@ fn start_service(paths: &Paths, profile: &ResolvedProfile, service: ServiceName)
 
     if let Some(port) = expected_service_port(profile, service) {
         if local_port_in_use(port)? {
+            let conflicting_profiles =
+                profiles_using_service_port(registry, profile, service, port);
+            let profile_hint = if conflicting_profiles.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "\n\nLikely conflicting profile(s): {}",
+                    conflicting_profiles.join(", ")
+                )
+            };
             let details = port_usage_details(port)
                 .map(|output| format!("\n\nPort usage:\n{output}"))
                 .unwrap_or_default();
             bail!(
-                "cannot start '{}' for profile '{}': port {} is already in use{}",
+                "cannot start '{}' for profile '{}': port {} is already in use{}{}",
                 service.as_str(),
                 profile.profile_name,
                 port,
+                profile_hint,
                 details
             );
         }
@@ -1054,7 +1115,11 @@ fn set_role(paths: &Paths, profile: &ResolvedProfile, username: &str, role: &str
     Ok(())
 }
 
-fn ensure_db_running(paths: &Paths, profile: &ResolvedProfile) -> Result<()> {
+fn ensure_db_running(
+    registry: &ConfigRegistry,
+    paths: &Paths,
+    profile: &ResolvedProfile,
+) -> Result<()> {
     if !profile.services.contains_key(&ServiceName::Db) {
         return Ok(());
     }
@@ -1063,7 +1128,7 @@ fn ensure_db_running(paths: &Paths, profile: &ResolvedProfile) -> Result<()> {
         return Ok(());
     }
 
-    start_service(paths, profile, ServiceName::Db)
+    start_service(registry, paths, profile, ServiceName::Db)
 }
 
 fn ensure_restore_safe(paths: &Paths) -> Result<()> {
@@ -1096,8 +1161,13 @@ fn sanitize_backup_name(name: &str) -> String {
     sanitized.trim_matches('_').to_owned()
 }
 
-fn create_backup(paths: &Paths, profile: &ResolvedProfile, name: Option<&str>) -> Result<()> {
-    ensure_db_running(paths, profile)?;
+fn create_backup(
+    registry: &ConfigRegistry,
+    paths: &Paths,
+    profile: &ResolvedProfile,
+    name: Option<&str>,
+) -> Result<()> {
+    ensure_db_running(registry, paths, profile)?;
 
     let database = database_config(profile)?;
     let timestamp = Utc::now().format("%Y%m%d-%H%M%S").to_string();
@@ -1125,9 +1195,14 @@ fn resolve_backup_path(paths: &Paths, backup: &str) -> PathBuf {
     }
 }
 
-fn restore_backup(paths: &Paths, profile: &ResolvedProfile, backup: &str) -> Result<()> {
+fn restore_backup(
+    registry: &ConfigRegistry,
+    paths: &Paths,
+    profile: &ResolvedProfile,
+    backup: &str,
+) -> Result<()> {
     ensure_restore_safe(paths)?;
-    ensure_db_running(paths, profile)?;
+    ensure_db_running(registry, paths, profile)?;
 
     let backup_path = resolve_backup_path(paths, backup);
     if !backup_path.exists() {
@@ -1144,58 +1219,66 @@ fn restore_backup(paths: &Paths, profile: &ResolvedProfile, backup: &str) -> Res
 }
 
 fn run() -> Result<()> {
-    let cli = Cli::parse();
     let repo_root = repo_root()?;
     let registry = load_registry(&repo_root)?;
 
-    if matches!(cli.command, CommandKind::ListProfiles) {
-        list_profiles(&registry);
-        return Ok(());
+    if matches!(env::args().nth(1).as_deref(), Some("list-profiles")) {
+        let cli = RootCli::parse();
+        match cli.command {
+            RootCommandKind::ListProfiles => {
+                list_profiles(&registry);
+                return Ok(());
+            }
+        }
     }
 
+    let cli = ProfileCli::parse();
     let profile = resolve_profile(&registry, &cli.profile)?;
     let paths = state_paths(&profile.state_namespace)?;
     ensure_state_dirs(&paths)?;
 
     match cli.command {
-        CommandKind::ListProfiles => {}
-        CommandKind::Start { service } => {
+        ProfileCommandKind::Start { service } => {
             print_profile_endpoints(&profile);
             for service in dependency_order(&profile, &service)? {
-                start_service(&paths, &profile, service)?;
+                start_service(&registry, &paths, &profile, service)?;
                 if service == ServiceName::Db {
                     ensure_profile_database(&paths, &profile)?;
                 }
             }
         }
-        CommandKind::Stop { service } => {
+        ProfileCommandKind::Stop { service } => {
             let mut order = dependency_order(&profile, &service)?;
             order.reverse();
             for service in order {
                 stop_service(&paths, &profile, service)?;
             }
         }
-        CommandKind::Restart { service } => {
+        ProfileCommandKind::Restart { service } => {
             print_profile_endpoints(&profile);
             let order = dependency_order(&profile, &service)?;
             for service in order.iter().rev().copied() {
                 stop_service(&paths, &profile, service)?;
             }
             for service in order {
-                start_service(&paths, &profile, service)?;
+                start_service(&registry, &paths, &profile, service)?;
                 if service == ServiceName::Db {
                     ensure_profile_database(&paths, &profile)?;
                 }
             }
         }
-        CommandKind::Log { service, follow } => show_logs(&paths, &service, follow)?,
-        CommandKind::Backup { name } => create_backup(&paths, &profile, name.as_deref())?,
-        CommandKind::Restore { backup } => restore_backup(&paths, &profile, &backup)?,
-        CommandKind::SetPassword {
+        ProfileCommandKind::Log { service, follow } => show_logs(&paths, &service, follow)?,
+        ProfileCommandKind::Backup { name } => {
+            create_backup(&registry, &paths, &profile, name.as_deref())?
+        }
+        ProfileCommandKind::Restore { backup } => {
+            restore_backup(&registry, &paths, &profile, &backup)?
+        }
+        ProfileCommandKind::SetPassword {
             username,
             new_password,
         } => set_password(&paths, &profile, &username, &new_password)?,
-        CommandKind::SetRole { username, role } => {
+        ProfileCommandKind::SetRole { username, role } => {
             set_role(&paths, &profile, &username, &role)?
         }
     }

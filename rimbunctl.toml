@@ -27,6 +27,14 @@ vars.db_prefix = "rimbun_feature_requests"
 vars.project_name = "benaristan"
 vars.db_prefix = "benaristan"
 
+[profiles.dev]
+extends = ["local-docker", "rimbun-local", "ensure-profile-db"]
+state_namespace = "dev"
+vars.db_name = "rimbun_dev"
+vars.backend_port = "3030"
+vars.frontend_port = "5203"
+vars.embedding_port = "8031"
+
 [profiles.quran-dev]
 extends = ["local-docker", "rimbun-local", "ensure-profile-db", "project_quran"]
 state_namespace = "quran-dev"
