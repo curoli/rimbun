@@ -21,6 +21,26 @@ export const SITE_COLOR_SCHEMES = [
     label: "Rose Evening",
     description: "Muted brick and blush tones with softer warmth.",
   },
+  {
+    value: "midnight-ink",
+    label: "Midnight Ink",
+    description: "Deep blue-black contrast with cool editorial highlights.",
+  },
+  {
+    value: "citrus-ledger",
+    label: "Citrus Ledger",
+    description: "Sharp lime and ledger-paper tones with brighter energy.",
+  },
+  {
+    value: "violet-archive",
+    label: "Violet Archive",
+    description: "Dusty plum and archive-paper tones with a denser mood.",
+  },
+  {
+    value: "volcanic-clay",
+    label: "Volcanic Clay",
+    description: "Dark mineral surfaces with ember-colored accents.",
+  },
 ] as const;
 
 export type SiteColorScheme = (typeof SITE_COLOR_SCHEMES)[number]["value"];

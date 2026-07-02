@@ -18,7 +18,14 @@ pub struct UpdateSiteSettingsRequest {
 fn is_valid_color_scheme(value: &str) -> bool {
     matches!(
         value,
-        "amber-dawn" | "forest-paper" | "sea-glass" | "rose-evening"
+        "amber-dawn"
+            | "forest-paper"
+            | "sea-glass"
+            | "rose-evening"
+            | "midnight-ink"
+            | "citrus-ledger"
+            | "violet-archive"
+            | "volcanic-clay"
     )
 }
 

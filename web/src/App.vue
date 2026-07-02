@@ -309,6 +309,136 @@ onBeforeUnmount(() => {
     #985245;
 }
 
+:root[data-rimbun-theme="midnight-ink"] {
+  color-scheme: dark;
+  --bg-radial: rgba(85, 126, 193, 0.18);
+  --bg-start: #111827;
+  --bg-end: #0b1220;
+  --text-primary: #ecf2ff;
+  --text-secondary: #afbdd7;
+  --text-muted: #91a4c5;
+  --text-soft: #c4d0e6;
+  --text-strong: #f6f8ff;
+  --text-on-accent: #08111e;
+  --accent: #8db4ff;
+  --accent-soft: #243550;
+  --accent-hover: #304668;
+  --accent-contrast: #d7e5ff;
+  --surface-hero: linear-gradient(135deg, rgba(25, 36, 60, 0.96), rgba(42, 60, 98, 0.92));
+  --surface-panel: rgba(18, 27, 43, 0.94);
+  --surface-panel-strong: rgba(18, 27, 43, 0.99);
+  --surface-topbar: rgba(11, 18, 32, 0.84);
+  --surface-input: #162235;
+  --surface-raised: #132033;
+  --surface-toggle: #21314b;
+  --border-soft: rgba(196, 208, 230, 0.12);
+  --border-medium: rgba(196, 208, 230, 0.18);
+  --border-strong: rgba(196, 208, 230, 0.24);
+  --shadow-soft: rgba(0, 0, 0, 0.3);
+  --danger: #ff8a7d;
+  --danger-strong: #ff6f61;
+  --hero-gradient:
+    linear-gradient(160deg, rgba(141, 180, 255, 0.86), rgba(100, 146, 235, 0.78)),
+    #8db4ff;
+}
+
+:root[data-rimbun-theme="citrus-ledger"] {
+  --bg-radial: rgba(177, 202, 70, 0.16);
+  --bg-start: #f5f6df;
+  --bg-end: #ecefcf;
+  --text-primary: #202111;
+  --text-secondary: #60653e;
+  --text-muted: #6b7245;
+  --text-soft: #535735;
+  --text-strong: #282a16;
+  --text-on-accent: #f9fff0;
+  --accent: #7a8c1f;
+  --accent-soft: #e2e9b8;
+  --accent-hover: #ebf0c8;
+  --accent-contrast: #49550d;
+  --surface-hero: linear-gradient(135deg, rgba(252, 252, 239, 0.98), rgba(224, 234, 173, 0.94));
+  --surface-panel: rgba(252, 253, 244, 0.94);
+  --surface-panel-strong: rgba(252, 253, 244, 0.98);
+  --surface-topbar: rgba(248, 250, 231, 0.82);
+  --surface-input: #fffffb;
+  --surface-raised: #fbfceb;
+  --surface-toggle: #e7edbf;
+  --border-soft: rgba(32, 33, 17, 0.08);
+  --border-medium: rgba(32, 33, 17, 0.12);
+  --border-strong: rgba(32, 33, 17, 0.16);
+  --shadow-soft: rgba(32, 33, 17, 0.12);
+  --danger: #a84b21;
+  --danger-strong: #8a3917;
+  --hero-gradient:
+    linear-gradient(160deg, rgba(122, 140, 31, 0.9), rgba(183, 202, 70, 0.74)),
+    #7a8c1f;
+}
+
+:root[data-rimbun-theme="violet-archive"] {
+  --bg-radial: rgba(129, 93, 151, 0.16);
+  --bg-start: #f1eaf3;
+  --bg-end: #e7dfea;
+  --text-primary: #241928;
+  --text-secondary: #6a5574;
+  --text-muted: #755f7f;
+  --text-soft: #5d4867;
+  --text-strong: #2d2032;
+  --text-on-accent: #fbf4ff;
+  --accent: #7a5290;
+  --accent-soft: #e7d4ef;
+  --accent-hover: #f0e1f5;
+  --accent-contrast: #563267;
+  --surface-hero: linear-gradient(135deg, rgba(252, 245, 255, 0.98), rgba(222, 198, 234, 0.94));
+  --surface-panel: rgba(253, 249, 254, 0.95);
+  --surface-panel-strong: rgba(253, 249, 254, 0.99);
+  --surface-topbar: rgba(249, 244, 251, 0.82);
+  --surface-input: #ffffff;
+  --surface-raised: #fcf7fd;
+  --surface-toggle: #ebdcf1;
+  --border-soft: rgba(36, 25, 40, 0.08);
+  --border-medium: rgba(36, 25, 40, 0.12);
+  --border-strong: rgba(36, 25, 40, 0.16);
+  --shadow-soft: rgba(36, 25, 40, 0.12);
+  --danger: #b24461;
+  --danger-strong: #943450;
+  --hero-gradient:
+    linear-gradient(160deg, rgba(122, 82, 144, 0.9), rgba(175, 132, 198, 0.76)),
+    #7a5290;
+}
+
+:root[data-rimbun-theme="volcanic-clay"] {
+  color-scheme: dark;
+  --bg-radial: rgba(198, 94, 54, 0.16);
+  --bg-start: #1e1614;
+  --bg-end: #120e0d;
+  --text-primary: #f3e8e1;
+  --text-secondary: #c1aa9d;
+  --text-muted: #ae9689;
+  --text-soft: #d8c3b8;
+  --text-strong: #fff4ee;
+  --text-on-accent: #190d08;
+  --accent: #d4744a;
+  --accent-soft: #4a2b22;
+  --accent-hover: #61372b;
+  --accent-contrast: #ffd8c6;
+  --surface-hero: linear-gradient(135deg, rgba(54, 31, 25, 0.96), rgba(97, 55, 43, 0.92));
+  --surface-panel: rgba(33, 23, 20, 0.95);
+  --surface-panel-strong: rgba(33, 23, 20, 0.99);
+  --surface-topbar: rgba(18, 14, 13, 0.86);
+  --surface-input: #241916;
+  --surface-raised: #2b1d19;
+  --surface-toggle: #3a2621;
+  --border-soft: rgba(243, 232, 225, 0.12);
+  --border-medium: rgba(243, 232, 225, 0.18);
+  --border-strong: rgba(243, 232, 225, 0.24);
+  --shadow-soft: rgba(0, 0, 0, 0.34);
+  --danger: #ff8f72;
+  --danger-strong: #ff7758;
+  --hero-gradient:
+    linear-gradient(160deg, rgba(212, 116, 74, 0.88), rgba(241, 157, 97, 0.72)),
+    #d4744a;
+}
+
 * {
   box-sizing: border-box;
 }
