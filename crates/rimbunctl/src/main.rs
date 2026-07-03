@@ -38,6 +38,7 @@ struct ProfileCli {
 
 #[derive(Debug, Subcommand)]
 enum ProfileCommandKind {
+    ListUsers,
     Start {
         #[arg(default_value = "all")]
         service: ServiceTarget,
@@ -1088,6 +1089,23 @@ fn set_password(
     Ok(())
 }
 
+fn list_users(paths: &Paths, profile: &ResolvedProfile) -> Result<()> {
+    let status = Command::new("cargo")
+        .arg("run")
+        .arg("-p")
+        .arg("rimbun-api")
+        .arg("--bin")
+        .arg("rimbun-list-users")
+        .current_dir(&paths.repo_root)
+        .envs(&profile.env)
+        .status()?;
+
+    if !status.success() {
+        bail!("failed to list users");
+    }
+    Ok(())
+}
+
 fn set_role(paths: &Paths, profile: &ResolvedProfile, username: &str, role: &str) -> Result<()> {
     if username.is_empty() {
         bail!("username is required");
@@ -1238,6 +1256,7 @@ fn run() -> Result<()> {
     ensure_state_dirs(&paths)?;
 
     match cli.command {
+        ProfileCommandKind::ListUsers => list_users(&paths, &profile)?,
         ProfileCommandKind::Start { service } => {
             print_profile_endpoints(&profile);
             for service in dependency_order(&profile, &service)? {
