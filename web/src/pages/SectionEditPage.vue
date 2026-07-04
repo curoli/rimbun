@@ -191,7 +191,7 @@ onMounted(async () => {
         <div class="document-header-meta">
           <p class="document-slug">Section workspace</p>
           <DocumentViewNav
-            :document-id="selectedSection.document_id"
+            :document-ref="documentData?.document.slug ?? selectedSection.document_id"
             :can-manage-outline="canManageOutline"
             :section-id="selectedSection.id"
             active-view="edit"

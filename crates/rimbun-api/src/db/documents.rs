@@ -83,6 +83,21 @@ pub async fn find_by_id(pool: &PgPool, id: uuid::Uuid) -> anyhow::Result<Option<
     Ok(record)
 }
 
+pub async fn find_by_slug(pool: &PgPool, slug: &str) -> anyhow::Result<Option<DocumentRecord>> {
+    let record = sqlx::query_as::<_, DocumentRecord>(
+        r#"
+        select id, slug, title, visibility, markdown_policy, created_by, created_at
+        from documents
+        where slug = $1
+        "#,
+    )
+    .bind(slug)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(record)
+}
+
 pub async fn update(
     pool: &PgPool,
     id: uuid::Uuid,

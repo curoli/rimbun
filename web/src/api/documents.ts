@@ -13,8 +13,8 @@ export function listDocuments() {
   return apiRequest<DocumentRecord[]>("/api/documents");
 }
 
-export function getDocument(id: string) {
-  return apiRequest<DocumentDetailResponse>(`/api/documents/${id}`);
+export function getDocument(documentRef: string) {
+  return apiRequest<DocumentDetailResponse>(`/api/documents/${documentRef}`);
 }
 
 export function updateDocument(

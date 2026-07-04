@@ -42,7 +42,7 @@ pub struct SectionViewResponse {
 pub async fn create(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path(document_id): Path<uuid::Uuid>,
+    Path(document_ref): Path<String>,
     Json(payload): Json<CreateSectionRequest>,
 ) -> Result<Json<sections::SectionRecord>, ApiError> {
     let user = require_current_user(State(state.clone()), &headers).await?;
@@ -50,9 +50,8 @@ pub async fn create(
         return Err(ApiError::forbidden("admin role required"));
     }
 
-    let _document = documents::find_by_id(&state.pool, document_id)
-        .await
-        .map_err(|err| ApiError::internal(err.to_string()))?
+    let document = crate::handlers::documents::resolve_document_ref(&state.pool, &document_ref)
+        .await?
         .ok_or_else(|| ApiError::not_found("document not found"))?;
 
     if payload.has_heading && payload.title.trim().is_empty() {
@@ -66,7 +65,7 @@ pub async fn create(
             .map_err(|err| ApiError::internal(err.to_string()))?
             .ok_or_else(|| ApiError::not_found("parent section not found"))?;
 
-        if parent.document_id != document_id {
+        if parent.document_id != document.id {
             return Err(ApiError::bad_request(
                 "parent section belongs to another document",
             ));
@@ -81,7 +80,7 @@ pub async fn create(
         &state.pool,
         &sections::NewSection {
             id: section_id,
-            document_id,
+            document_id: document.id,
             parent_id: payload.parent_id,
             title: payload.title.trim().to_owned(),
             has_heading: payload.has_heading,

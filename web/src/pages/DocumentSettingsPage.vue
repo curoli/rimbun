@@ -47,16 +47,20 @@ function syncForm() {
 }
 
 async function loadDocument() {
-  const id = route.params.id;
-  if (typeof id !== "string") {
+  const documentRef = route.params.documentRef;
+  if (typeof documentRef !== "string") {
     return;
   }
 
   isLoadingDocument.value = true;
   error.value = null;
   try {
-    const data = await getDocument(id);
+    const data = await getDocument(documentRef);
     documentData.value = data;
+    if (documentRef !== data.document.slug) {
+      await router.replace(`/documents/${data.document.slug}/settings`);
+      return;
+    }
     syncForm();
   } catch (loadError) {
     error.value = loadError instanceof Error ? loadError.message : "Failed to load document";
@@ -89,6 +93,9 @@ async function handleSave() {
       ...documentData.value,
       document: updated,
     };
+    if (route.params.documentRef !== updated.slug) {
+      await router.replace(`/documents/${updated.slug}/settings`);
+    }
     syncForm();
   } catch (saveError) {
     error.value = saveError instanceof Error ? saveError.message : "Failed to save document settings";
@@ -98,7 +105,7 @@ async function handleSave() {
 }
 
 watch(
-  () => route.params.id,
+  () => route.params.documentRef,
   () => {
     void loadDocument();
   },
@@ -127,7 +134,7 @@ onMounted(async () => {
         <div class="document-header-meta">
           <p class="document-slug">{{ documentData.document.slug }}</p>
           <DocumentViewNav
-            :document-id="documentData.document.id"
+            :document-ref="documentData.document.slug"
             :can-manage-outline="canManageDocument"
             active-view="settings"
           />

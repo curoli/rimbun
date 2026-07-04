@@ -3,7 +3,7 @@ import { computed } from "vue";
 import { RouterLink } from "vue-router";
 
 const props = defineProps<{
-  documentId: string;
+  documentRef: string;
   canManageOutline?: boolean;
   activeView: "reader" | "edit" | "outline" | "settings";
   sectionId?: string | null;
@@ -14,7 +14,7 @@ const editTarget = computed(() => (props.sectionId ? `/sections/${props.sectionI
 
 <template>
   <nav class="view-nav" aria-label="Document views">
-    <RouterLink :class="{ active: activeView === 'reader' }" :to="`/documents/${documentId}`">
+    <RouterLink :class="{ active: activeView === 'reader' }" :to="`/documents/${documentRef}`">
       Read
     </RouterLink>
     <RouterLink
@@ -27,14 +27,14 @@ const editTarget = computed(() => (props.sectionId ? `/sections/${props.sectionI
     <RouterLink
       v-if="canManageOutline"
       :class="{ active: activeView === 'outline' }"
-      :to="`/documents/${documentId}/outline`"
+      :to="`/documents/${documentRef}/outline`"
     >
       Outline
     </RouterLink>
     <RouterLink
       v-if="canManageOutline"
       :class="{ active: activeView === 'settings' }"
-      :to="`/documents/${documentId}/settings`"
+      :to="`/documents/${documentRef}/settings`"
     >
       Settings
     </RouterLink>

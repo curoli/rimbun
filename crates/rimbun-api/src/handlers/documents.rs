@@ -34,6 +34,21 @@ pub struct DocumentDetailResponse {
     pub sections: Vec<sections::SectionRecord>,
 }
 
+pub async fn resolve_document_ref(
+    pool: &sqlx::PgPool,
+    document_ref: &str,
+) -> Result<Option<documents::DocumentRecord>, ApiError> {
+    if let Ok(id) = uuid::Uuid::parse_str(document_ref) {
+        return documents::find_by_id(pool, id)
+            .await
+            .map_err(|err| ApiError::internal(err.to_string()));
+    }
+
+    documents::find_by_slug(pool, document_ref)
+        .await
+        .map_err(|err| ApiError::internal(err.to_string()))
+}
+
 pub async fn list(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -89,12 +104,11 @@ pub async fn create(
 pub async fn show(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path(id): Path<uuid::Uuid>,
+    Path(document_ref): Path<String>,
 ) -> Result<Json<DocumentDetailResponse>, ApiError> {
     let current_user = maybe_current_user(State(state.clone()), &headers).await?;
-    let document = documents::find_by_id(&state.pool, id)
-        .await
-        .map_err(|err| ApiError::internal(err.to_string()))?
+    let document = resolve_document_ref(&state.pool, &document_ref)
+        .await?
         .ok_or_else(|| ApiError::not_found("document not found"))?;
 
     if document.visibility == "authenticated" && current_user.is_none() {
@@ -111,7 +125,7 @@ pub async fn show(
 pub async fn update(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path(id): Path<uuid::Uuid>,
+    Path(document_ref): Path<String>,
     Json(payload): Json<UpdateDocumentRequest>,
 ) -> Result<Json<documents::DocumentRecord>, ApiError> {
     let user = require_current_user(State(state.clone()), &headers).await?;
@@ -130,9 +144,13 @@ pub async fn update(
         ));
     }
 
+    let existing = resolve_document_ref(&state.pool, &document_ref)
+        .await?
+        .ok_or_else(|| ApiError::not_found("document not found"))?;
+
     let document = documents::update(
         &state.pool,
-        id,
+        existing.id,
         payload.slug.trim(),
         payload.title.trim(),
         &payload.visibility,

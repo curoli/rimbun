@@ -484,16 +484,20 @@ function variantExcerpt(
 }
 
 async function loadDocument() {
-  const id = route.params.id;
-  if (typeof id !== "string") {
+  const documentRef = route.params.documentRef;
+  if (typeof documentRef !== "string") {
     return;
   }
 
   isLoadingDocument.value = true;
   error.value = null;
   try {
-    const data = await getDocument(id);
+    const data = await getDocument(documentRef);
     documentData.value = data;
+    if (documentRef !== data.document.slug) {
+      await router.replace(`/documents/${data.document.slug}`);
+      return;
+    }
     selectedSectionId.value =
       selectedSectionId.value && data.sections.some((section) => section.id === selectedSectionId.value)
         ? selectedSectionId.value
@@ -551,7 +555,7 @@ function setCurrentPage(index: number) {
 }
 
 watch(
-  () => route.params.id,
+  () => route.params.documentRef,
   () => {
     selectedSectionId.value = null;
     void loadDocument();
@@ -603,7 +607,7 @@ watch(readerPages, (pages) => {
         <div class="document-header-meta">
           <p class="document-slug">{{ documentData.document.slug }}</p>
           <DocumentViewNav
-            :document-id="documentData.document.id"
+            :document-ref="documentData.document.slug"
             :can-manage-outline="canManageOutline"
             :section-id="selectedSectionId"
             active-view="reader"

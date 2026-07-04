@@ -90,8 +90,8 @@ function syncSectionForm() {
 }
 
 async function loadDocument() {
-  const id = route.params.id;
-  if (typeof id !== "string") {
+  const documentRef = route.params.documentRef;
+  if (typeof documentRef !== "string") {
     return;
   }
 
@@ -99,8 +99,12 @@ async function loadDocument() {
   error.value = null;
 
   try {
-    const data = await getDocument(id);
+    const data = await getDocument(documentRef);
     documentData.value = data;
+    if (documentRef !== data.document.slug) {
+      await router.replace(`/documents/${data.document.slug}/outline`);
+      return;
+    }
     if (!selectedSectionId.value || !data.sections.some((section) => section.id === selectedSectionId.value)) {
       selectedSectionId.value = data.sections[0]?.id ?? null;
     }
@@ -278,7 +282,7 @@ async function handleDemote() {
 watch(selectedSectionId, syncSectionForm);
 
 watch(
-  () => route.params.id,
+  () => route.params.documentRef,
   () => {
     selectedSectionId.value = null;
     void loadDocument();
@@ -308,7 +312,7 @@ onMounted(async () => {
         <div class="document-header-meta">
           <p class="document-slug">{{ documentData.document.slug }}</p>
           <DocumentViewNav
-            :document-id="documentData.document.id"
+            :document-ref="documentData.document.slug"
             :can-manage-outline="canManageSections"
             :section-id="selectedSectionId"
             active-view="outline"

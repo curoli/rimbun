@@ -226,7 +226,7 @@ async function handleRunCollection() {
   try {
     const result = await runVariantCollection(selectedCollection.value.collection.id);
     await loadCollections();
-    await router.push(`/documents/${result.document.id}`);
+    await router.push(`/documents/${result.document.slug}`);
   } catch (runError) {
     error.value = runError instanceof Error ? runError.message : "Failed to create test document";
   } finally {

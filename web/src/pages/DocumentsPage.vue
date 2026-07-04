@@ -76,7 +76,7 @@ onMounted(() => {
           v-for="document in documents"
           :key="document.id"
           class="document-card"
-          :to="`/documents/${document.id}`"
+          :to="`/documents/${document.slug}`"
         >
           <span class="visibility">{{ document.visibility }}</span>
           <h2>{{ document.title }}</h2>
