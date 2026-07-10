@@ -39,6 +39,16 @@ struct ProfileCli {
 #[derive(Debug, Subcommand)]
 enum ProfileCommandKind {
     ListUsers,
+    ExportContributions {
+        username: String,
+        file: Option<String>,
+    },
+    ImportContributions {
+        username: String,
+        file: String,
+        #[arg(long)]
+        publish: bool,
+    },
     Start {
         #[arg(default_value = "all")]
         service: ServiceTarget,
@@ -1106,6 +1116,83 @@ fn list_users(paths: &Paths, profile: &ResolvedProfile) -> Result<()> {
     Ok(())
 }
 
+fn export_contributions(
+    registry: &ConfigRegistry,
+    paths: &Paths,
+    profile: &ResolvedProfile,
+    username: &str,
+    file: Option<&str>,
+) -> Result<()> {
+    if username.is_empty() {
+        bail!("username is required");
+    }
+
+    ensure_db_running(registry, paths, profile)?;
+
+    let mut command = Command::new("cargo");
+    command
+        .arg("run")
+        .arg("-p")
+        .arg("rimbun-api")
+        .arg("--bin")
+        .arg("rimbun-export-user-contributions")
+        .arg("--")
+        .arg(username)
+        .current_dir(&paths.repo_root)
+        .envs(&profile.env);
+
+    if let Some(file) = file {
+        command.arg(file);
+    }
+
+    let status = command.status()?;
+    if !status.success() {
+        bail!("failed to export contributions");
+    }
+    Ok(())
+}
+
+fn import_contributions(
+    registry: &ConfigRegistry,
+    paths: &Paths,
+    profile: &ResolvedProfile,
+    username: &str,
+    file: &str,
+    publish: bool,
+) -> Result<()> {
+    if username.is_empty() {
+        bail!("username is required");
+    }
+    if file.is_empty() {
+        bail!("file is required");
+    }
+
+    ensure_db_running(registry, paths, profile)?;
+
+    let mut command = Command::new("cargo");
+    command
+        .arg("run")
+        .arg("-p")
+        .arg("rimbun-api")
+        .arg("--bin")
+        .arg("rimbun-import-user-contributions")
+        .arg("--")
+        .arg(username)
+        .arg(file)
+        .current_dir(&paths.repo_root)
+        .envs(&profile.env);
+    if publish {
+        command.arg("--publish");
+    }
+
+    let status = command.status()?;
+
+    if !status.success() {
+        bail!("failed to import contributions");
+    }
+    Ok(())
+}
+
 fn set_role(paths: &Paths, profile: &ResolvedProfile, username: &str, role: &str) -> Result<()> {
     if username.is_empty() {
         bail!("username is required");
@@ -1257,6 +1344,16 @@ fn run() -> Result<()> {
 
     match cli.command {
         ProfileCommandKind::ListUsers => list_users(&paths, &profile)?,
+        ProfileCommandKind::ExportContributions { username, file } => {
+            export_contributions(&registry, &paths, &profile, &username, file.as_deref())?
+        }
+        ProfileCommandKind::ImportContributions {
+            username,
+            file,
+            publish,
+        } => {
+            import_contributions(&registry, &paths, &profile, &username, &file, publish)?
+        }
         ProfileCommandKind::Start { service } => {
             print_profile_endpoints(&profile);
             for service in dependency_order(&profile, &service)? {
