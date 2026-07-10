@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use rimbun_api::{
     config::Config,
-    db::{drafts, projections, sections, submissions, users},
+    db::{comments, drafts, projections, sections, submissions, users},
 };
 use rimbun_embedding_client::EmbeddingClient;
 
@@ -27,6 +27,7 @@ struct ImportEntry {
     section_id: Uuid,
     base_submission_id: Option<Uuid>,
     draft_markdown: String,
+    draft_main_comment_markdown: Option<String>,
 }
 
 fn usage() {
@@ -130,6 +131,7 @@ async fn main() -> ExitCode {
             section_id,
             base_submission_id,
             draft_markdown,
+            draft_main_comment_markdown,
         } = entry;
 
         let section = match sections::find_by_id(&pool, section_id).await {
@@ -158,6 +160,7 @@ async fn main() -> ExitCode {
             user_id: user.id,
             base_submission_id,
             markdown_content: draft_markdown.clone(),
+            main_comment_markdown: draft_main_comment_markdown.clone(),
         };
 
         if let Err(error) = drafts::upsert(&pool, &draft).await {
@@ -217,6 +220,32 @@ async fn main() -> ExitCode {
                 return ExitCode::from(1);
             }
 
+            if let Some(markdown_content) = draft_main_comment_markdown
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                if let Err(error) = comments::create_in_tx(
+                    &mut tx,
+                    &comments::NewComment {
+                        id: Uuid::new_v4(),
+                        submission_id: submission.id,
+                        parent_comment_id: None,
+                        user_id: user.id,
+                        markdown_content: markdown_content.to_owned(),
+                        is_primary: true,
+                    },
+                )
+                .await
+                {
+                    eprintln!(
+                        "Error: failed to create primary comment for section '{}': {error}",
+                        section_id
+                    );
+                    return ExitCode::from(1);
+                }
+            }
+
             if let Err(error) = tx.commit().await {
                 eprintln!(
                     "Error: failed to commit published import for section '{}': {error}",
@@ -226,8 +255,7 @@ async fn main() -> ExitCode {
             }
 
             if let Err(error) =
-                projections::rebuild_trivial_for_section(&pool, &embedding_client, section_id)
-                    .await
+                projections::rebuild_trivial_for_section(&pool, &embedding_client, section_id).await
             {
                 eprintln!(
                     "Error: failed to rebuild projection for section '{}': {error}",
@@ -246,7 +274,10 @@ async fn main() -> ExitCode {
             user.username
         );
     } else {
-        println!("Imported {imported} contribution drafts for @{}", user.username);
+        println!(
+            "Imported {imported} contribution drafts for @{}",
+            user.username
+        );
     }
     ExitCode::SUCCESS
 }

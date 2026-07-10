@@ -60,7 +60,20 @@ export type DraftRecord = {
   user_id: string;
   base_submission_id: string | null;
   markdown_content: string;
+  main_comment_markdown: string | null;
   updated_at: string;
+};
+
+export type CommentRecord = {
+  id: string;
+  submission_id: string;
+  parent_comment_id: string | null;
+  user_id: string;
+  username: string;
+  display_name: string;
+  markdown_content: string;
+  is_primary: boolean;
+  created_at: string;
 };
 
 export type ProjectionItemRecord = {
@@ -81,6 +94,7 @@ export type SectionViewResponse = {
   section: SectionRecord;
   projection: ProjectionItemRecord[];
   active_submissions: SubmissionRecord[];
+  submission_comments: CommentRecord[];
   draft: DraftRecord | null;
   preferred_base_submission_id: string | null;
 };

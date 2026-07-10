@@ -2,6 +2,7 @@
 defineProps<{
   title: string;
   content: string;
+  mainComment: string;
   hasOwnText: boolean;
   saveState: string;
   publishState: string;
@@ -13,6 +14,7 @@ defineProps<{
 
 const emit = defineEmits<{
   "update:content": [value: string];
+  "update:mainComment": [value: string];
   save: [];
   publish: [];
 }>();
@@ -54,6 +56,14 @@ const emit = defineEmits<{
       :disabled="!canEdit"
       placeholder="Write the section content in Markdown."
       @input="emit('update:content', ($event.target as HTMLTextAreaElement).value)"
+    />
+    <textarea
+      v-if="hasOwnText"
+      class="comment-textarea"
+      :value="mainComment"
+      :disabled="!canEdit"
+      placeholder="Optional main comment for this contribution."
+      @input="emit('update:mainComment', ($event.target as HTMLTextAreaElement).value)"
     />
   </section>
 </template>
@@ -164,6 +174,10 @@ textarea {
   font-size: 0.96rem;
   line-height: 1.55;
   box-shadow: inset 0 0 0 1px var(--border-soft);
+}
+
+.comment-textarea {
+  min-height: 8rem;
 }
 
 .error {

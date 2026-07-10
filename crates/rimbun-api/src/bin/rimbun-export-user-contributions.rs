@@ -38,8 +38,10 @@ struct ExportEntry {
     draft_source: String,
     base_submission_id: Option<Uuid>,
     draft_markdown: String,
+    draft_main_comment_markdown: Option<String>,
     published_submission_id: Option<Uuid>,
     published_markdown: Option<String>,
+    published_main_comment_markdown: Option<String>,
     published_at: Option<DateTime<Utc>>,
 }
 
@@ -52,6 +54,7 @@ struct DraftRow {
     document_title: String,
     base_submission_id: Option<Uuid>,
     markdown_content: String,
+    main_comment_markdown: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -64,6 +67,7 @@ struct ActiveSubmissionRow {
     submission_id: Uuid,
     base_submission_id: Option<Uuid>,
     markdown_content: String,
+    published_main_comment_markdown: Option<String>,
     published_at: DateTime<Utc>,
 }
 
@@ -84,8 +88,10 @@ struct EntryBuilder {
     draft_source: String,
     base_submission_id: Option<Uuid>,
     draft_markdown: String,
+    draft_main_comment_markdown: Option<String>,
     published_submission_id: Option<Uuid>,
     published_markdown: Option<String>,
+    published_main_comment_markdown: Option<String>,
     published_at: Option<DateTime<Utc>>,
 }
 
@@ -108,8 +114,10 @@ impl EntryBuilder {
             draft_source: "empty".to_owned(),
             base_submission_id: None,
             draft_markdown: String::new(),
+            draft_main_comment_markdown: None,
             published_submission_id: None,
             published_markdown: None,
+            published_main_comment_markdown: None,
             published_at: None,
         }
     }
@@ -125,8 +133,10 @@ impl EntryBuilder {
             draft_source: self.draft_source,
             base_submission_id: self.base_submission_id,
             draft_markdown: self.draft_markdown,
+            draft_main_comment_markdown: self.draft_main_comment_markdown,
             published_submission_id: self.published_submission_id,
             published_markdown: self.published_markdown,
+            published_main_comment_markdown: self.published_main_comment_markdown,
             published_at: self.published_at,
         }
     }
@@ -215,7 +225,8 @@ async fn main() -> ExitCode {
           d.slug as document_slug,
           d.title as document_title,
           dr.base_submission_id,
-          dr.markdown_content
+          dr.markdown_content,
+          dr.main_comment_markdown
         from drafts dr
         join sections s on s.id = dr.section_id
         join documents d on d.id = s.document_id
@@ -246,6 +257,15 @@ async fn main() -> ExitCode {
           sub.id as submission_id,
           sub.base_submission_id,
           sub.markdown_content,
+          (
+            select c.markdown_content
+            from comments c
+            where c.submission_id = sub.id
+              and c.user_id = sub.user_id
+              and c.is_primary = true
+              and c.parent_comment_id is null
+            limit 1
+          ) as published_main_comment_markdown,
           sub.published_at
         from submissions sub
         join sections s on s.id = sub.section_id
@@ -335,12 +355,14 @@ async fn main() -> ExitCode {
 
         entry.published_submission_id = Some(row.submission_id);
         entry.published_markdown = Some(row.markdown_content.clone());
+        entry.published_main_comment_markdown = row.published_main_comment_markdown.clone();
         entry.published_at = Some(row.published_at);
 
         if entry.draft_source == "empty" {
             entry.draft_source = "published".to_owned();
             entry.base_submission_id = row.base_submission_id;
             entry.draft_markdown = row.markdown_content;
+            entry.draft_main_comment_markdown = row.published_main_comment_markdown;
         }
     }
 
@@ -365,6 +387,7 @@ async fn main() -> ExitCode {
         entry.draft_source = "draft".to_owned();
         entry.base_submission_id = row.base_submission_id;
         entry.draft_markdown = row.markdown_content;
+        entry.draft_main_comment_markdown = row.main_comment_markdown;
     }
 
     for entry in entries.values_mut() {
@@ -396,7 +419,11 @@ async fn main() -> ExitCode {
     match output_file {
         Some(path) => match fs::write(&path, rendered) {
             Ok(()) => {
-                println!("Exported {} contribution entries to {}", export.entries.len(), path);
+                println!(
+                    "Exported {} contribution entries to {}",
+                    export.entries.len(),
+                    path
+                );
                 ExitCode::SUCCESS
             }
             Err(error) => {

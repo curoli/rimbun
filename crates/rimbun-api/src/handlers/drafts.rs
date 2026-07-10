@@ -16,6 +16,7 @@ use crate::{
 pub struct SaveDraftRequest {
     pub base_submission_id: Option<uuid::Uuid>,
     pub markdown_content: String,
+    pub main_comment_markdown: Option<String>,
 }
 
 pub async fn save(
@@ -45,6 +46,10 @@ pub async fn save(
             user_id: user.id,
             base_submission_id: payload.base_submission_id,
             markdown_content: payload.markdown_content,
+            main_comment_markdown: payload
+                .main_comment_markdown
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty()),
         },
     )
     .await

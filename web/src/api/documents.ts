@@ -4,6 +4,7 @@ import type {
   DocumentRecord,
   DraftRecord,
   PublishResponse,
+  CommentRecord,
   SectionRecord,
   SectionCompareDto,
   SectionViewResponse,
@@ -84,15 +85,34 @@ export function getSectionCompare(sectionId: string) {
   return apiRequest<SectionCompareDto>(`/api/sections/${sectionId}/compare`);
 }
 
-export function saveDraft(sectionId: string, payload: { base_submission_id: string | null; markdown_content: string }) {
+export function saveDraft(sectionId: string, payload: {
+  base_submission_id: string | null;
+  markdown_content: string;
+  main_comment_markdown: string | null;
+}) {
   return apiRequest<DraftRecord>(`/api/sections/${sectionId}/draft`, {
     method: "PUT",
     bodyJson: payload,
   });
 }
 
-export function publishSection(sectionId: string, payload: { base_submission_id: string | null; markdown_content: string }) {
+export function publishSection(sectionId: string, payload: {
+  base_submission_id: string | null;
+  markdown_content: string;
+  main_comment_markdown: string | null;
+}) {
   return apiRequest<PublishResponse>(`/api/sections/${sectionId}/publish`, {
+    method: "POST",
+    bodyJson: payload,
+  });
+}
+
+export function createSubmissionComment(submissionId: string, payload: {
+  parent_comment_id: string | null;
+  markdown_content: string;
+  is_primary?: boolean;
+}) {
+  return apiRequest<CommentRecord>(`/api/submissions/${submissionId}/comments`, {
     method: "POST",
     bodyJson: payload,
   });

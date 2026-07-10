@@ -6,7 +6,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    db::{projections, sections, submissions},
+    db::{comments, projections, sections, submissions},
     error::ApiError,
     http::extractors::{maybe_current_user, require_current_user},
     state::AppState,
@@ -16,6 +16,7 @@ use crate::{
 pub struct PublishRequest {
     pub base_submission_id: Option<uuid::Uuid>,
     pub markdown_content: String,
+    pub main_comment_markdown: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -65,6 +66,27 @@ pub async fn publish(
     submissions::supersede_previous_active_for_user(&mut tx, section_id, user.id, submission.id)
         .await
         .map_err(|err| ApiError::internal(err.to_string()))?;
+
+    let main_comment_markdown = payload
+        .main_comment_markdown
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+
+    if let Some(markdown_content) = main_comment_markdown {
+        comments::create_in_tx(
+            &mut tx,
+            &comments::NewComment {
+                id: uuid::Uuid::new_v4(),
+                submission_id: submission.id,
+                parent_comment_id: None,
+                user_id: user.id,
+                markdown_content,
+                is_primary: true,
+            },
+        )
+        .await
+        .map_err(|err| ApiError::internal(err.to_string()))?;
+    }
 
     tx.commit()
         .await

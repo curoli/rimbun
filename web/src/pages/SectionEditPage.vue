@@ -2,8 +2,8 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
-import { getDocument, getSectionView, publishSection, saveDraft, setPreferredBase } from "../api/documents";
-import type { DocumentDetailResponse, SectionViewResponse } from "../api/types";
+import { createSubmissionComment, getDocument, getSectionView, publishSection, saveDraft, setPreferredBase } from "../api/documents";
+import type { CommentRecord, DocumentDetailResponse, SectionViewResponse } from "../api/types";
 import DocumentViewNav from "../components/DocumentViewNav.vue";
 import SectionEditor from "../components/SectionEditor.vue";
 import SubmissionList from "../components/SubmissionList.vue";
@@ -17,6 +17,7 @@ const auth = useAuthStore();
 const documentData = ref<DocumentDetailResponse | null>(null);
 const sectionView = ref<SectionViewResponse | null>(null);
 const draftContent = ref("");
+const draftMainComment = ref("");
 const isLoadingSection = ref(true);
 const saveState = ref<"idle" | "saving">("idle");
 const publishState = ref<"idle" | "publishing">("idle");
@@ -70,6 +71,7 @@ function syncDraftFromView(view: SectionViewResponse | null) {
 
   if (view.draft) {
     draftContent.value = view.draft.markdown_content;
+    draftMainComment.value = view.draft.main_comment_markdown ?? "";
     return;
   }
 
@@ -81,6 +83,15 @@ function syncDraftFromView(view: SectionViewResponse | null) {
     view.active_submissions[0];
 
   draftContent.value = preferred?.markdown_content ?? "";
+  draftMainComment.value = preferred ? primaryCommentForSubmission(view, preferred.id)?.markdown_content ?? "" : "";
+}
+
+function primaryCommentForSubmission(view: SectionViewResponse, submissionId: string) {
+  return (
+    view.submission_comments.find(
+      (comment) => comment.submission_id === submissionId && comment.is_primary && !comment.parent_comment_id,
+    ) ?? null
+  );
 }
 
 async function loadSectionView() {
@@ -118,6 +129,7 @@ async function handleSaveDraft() {
     await saveDraft(sectionId, {
       base_submission_id: sectionView.value?.preferred_base_submission_id ?? null,
       markdown_content: draftContent.value,
+      main_comment_markdown: draftMainComment.value.trim() || null,
     });
     await loadSectionView();
   } catch (saveError) {
@@ -139,12 +151,32 @@ async function handlePublish() {
     await publishSection(sectionId, {
       base_submission_id: sectionView.value?.preferred_base_submission_id ?? null,
       markdown_content: draftContent.value,
+      main_comment_markdown: draftMainComment.value.trim() || null,
     });
     await loadSectionView();
   } catch (publishError) {
     error.value = publishError instanceof Error ? publishError.message : "Failed to publish section";
   } finally {
     publishState.value = "idle";
+  }
+}
+
+async function handleCreateComment(payload: {
+  submissionId: string;
+  parentCommentId: string | null;
+  markdownContent: string;
+  isPrimary?: boolean;
+}) {
+  error.value = null;
+  try {
+    await createSubmissionComment(payload.submissionId, {
+      parent_comment_id: payload.parentCommentId,
+      markdown_content: payload.markdownContent,
+      is_primary: payload.isPrimary,
+    });
+    await loadSectionView();
+  } catch (commentError) {
+    error.value = commentError instanceof Error ? commentError.message : "Failed to create comment";
   }
 }
 
@@ -203,6 +235,7 @@ onMounted(async () => {
         <SectionEditor
           :title="sectionHeadingLabel"
           :content="draftContent"
+          :main-comment="draftMainComment"
           :has-own-text="selectedSection.has_own_text"
           :save-state="saveState"
           :publish-state="publishState"
@@ -221,6 +254,7 @@ onMounted(async () => {
                 : 'Login required'
           "
           @update:content="draftContent = $event"
+          @update:main-comment="draftMainComment = $event"
           @save="handleSaveDraft"
           @publish="handlePublish"
         />
@@ -228,9 +262,13 @@ onMounted(async () => {
         <SubmissionList
           v-if="selectedSection.has_own_text"
           :submissions="sectionView.active_submissions"
+          :comments="sectionView.submission_comments"
           :projection="sectionView.projection"
           :preferred-base-submission-id="sectionView.preferred_base_submission_id"
+          :current-user-id="auth.user?.id ?? null"
+          :can-comment="Boolean(auth.user)"
           @set-base="handleSetBase"
+          @create-comment="handleCreateComment"
         />
         <p v-else class="empty-note">This section has no own text. Only its subsections contribute content.</p>
       </div>

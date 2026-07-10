@@ -6,7 +6,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    db::{documents, drafts, preferences, projections, sections, submissions},
+    db::{comments, documents, drafts, preferences, projections, sections, submissions},
     error::ApiError,
     http::extractors::{maybe_current_user, require_current_user},
     state::AppState,
@@ -35,6 +35,7 @@ pub struct SectionViewResponse {
     pub section: sections::SectionRecord,
     pub projection: Vec<projections::ProjectionItemRecord>,
     pub active_submissions: Vec<submissions::SubmissionRecord>,
+    pub submission_comments: Vec<comments::CommentRecord>,
     pub draft: Option<drafts::DraftRecord>,
     pub preferred_base_submission_id: Option<uuid::Uuid>,
 }
@@ -203,6 +204,15 @@ pub async fn view(
     let active_submissions = submissions::list_active_visible_by_section(&state.pool, section_id)
         .await
         .map_err(|err| ApiError::internal(err.to_string()))?;
+    let submission_comments = comments::list_by_submission_ids(
+        &state.pool,
+        &active_submissions
+            .iter()
+            .map(|submission| submission.id)
+            .collect::<Vec<_>>(),
+    )
+    .await
+    .map_err(|err| ApiError::internal(err.to_string()))?;
 
     let (draft, preferred_base_submission_id) = if let Some(user) = current_user {
         let draft = drafts::find_by_section_and_user(&state.pool, section_id, user.id)
@@ -224,6 +234,7 @@ pub async fn view(
         section,
         projection,
         active_submissions,
+        submission_comments,
         draft,
         preferred_base_submission_id,
     }))

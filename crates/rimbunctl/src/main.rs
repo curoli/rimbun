@@ -1,13 +1,12 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    env,
-    fs,
+    env, fs,
     io::ErrorKind,
     net::TcpListener,
     os::unix::process::CommandExt,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
     process::ExitCode,
+    process::{Command, Stdio},
     thread,
     time::Duration,
 };
@@ -1351,9 +1350,7 @@ fn run() -> Result<()> {
             username,
             file,
             publish,
-        } => {
-            import_contributions(&registry, &paths, &profile, &username, &file, publish)?
-        }
+        } => import_contributions(&registry, &paths, &profile, &username, &file, publish)?,
         ProfileCommandKind::Start { service } => {
             print_profile_endpoints(&profile);
             for service in dependency_order(&profile, &service)? {

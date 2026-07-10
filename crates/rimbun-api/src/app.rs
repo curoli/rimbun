@@ -109,6 +109,10 @@ pub async fn build(config: Config) -> anyhow::Result<Router> {
             "/api/submissions/{id}/moderate",
             post(crate::handlers::moderation::update),
         )
+        .route(
+            "/api/submissions/{id}/comments",
+            get(crate::handlers::comments::list).post(crate::handlers::comments::create),
+        )
         .with_state(state);
 
     Ok(router)

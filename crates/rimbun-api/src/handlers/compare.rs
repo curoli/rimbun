@@ -608,7 +608,9 @@ mod tests {
             .iter()
             .find(|block| block.kind == BlockKind::Paragraph)
             .expect("paragraph block");
-        let comparison = comparison_set.comparison_by_id("alt").expect("comparison alt");
+        let comparison = comparison_set
+            .comparison_by_id("alt")
+            .expect("comparison alt");
 
         let variants = changed_variants_for_block(
             &comparison_set,
