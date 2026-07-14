@@ -85,7 +85,7 @@ function handleSectionClick(section: SectionRecord) {
 }
 
 function sectionLabel(section: SectionRecord) {
-  return section.has_heading ? section.title : "(no heading)";
+  return section.has_heading ? section.title : "";
 }
 </script>
 
@@ -107,7 +107,7 @@ function sectionLabel(section: SectionRecord) {
         {{ isCollapsed(section.id) ? ">" : "v" }}
       </span>
       <span class="tree-number">{{ sectionNumbers.get(section.id)?.full }}</span>
-      <span class="tree-title" :class="{ muted: !section.has_heading }">{{ sectionLabel(section) }}</span>
+      <span v-if="sectionLabel(section)" class="tree-title">{{ sectionLabel(section) }}</span>
     </button>
   </aside>
 </template>
@@ -178,8 +178,4 @@ function sectionLabel(section: SectionRecord) {
   min-width: 0;
 }
 
-.tree-title.muted {
-  color: #7a6759;
-  font-style: italic;
-}
 </style>

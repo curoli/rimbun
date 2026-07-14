@@ -213,6 +213,10 @@ function sectionDisplayTitle(section: SectionRecord) {
   return section.has_heading ? section.title : "";
 }
 
+function showsInlineSectionNumber(item: SectionCompareItem, blockIndex: number) {
+  return !item.section.has_heading && blockIndex === 0 && Boolean(item.number);
+}
+
 function inlineDiff(block: CompareBlockDto, alternativeText: string) {
   return buildInlineDiff(block.main_text, alternativeText);
 }
@@ -689,12 +693,18 @@ watch(readerPages, (pages) => {
 
               <div v-if="item.compare?.blocks.length" class="block-list">
                 <section
-                  v-for="block in item.compare.blocks"
+                  v-for="(block, blockIndex) in item.compare.blocks"
                   :key="`${item.section.id}-${block.anchor.block_key}-${block.block_index}`"
                   class="block-card"
                   :class="{ changed: changedVariants(block).length > 0 }"
                 >
                   <p class="main-block-text">
+                    <span
+                      v-if="showsInlineSectionNumber(item, blockIndex)"
+                      class="inline-section-number"
+                    >
+                      {{ item.number }}
+                    </span>
                     <template
                       v-for="(segment, segmentIndex) in mainSegments(item, block)"
                       :key="`${block.anchor.block_key}-${block.block_index}-${segmentIndex}`"
@@ -915,6 +925,14 @@ watch(readerPages, (pages) => {
   margin-right: 0.55rem;
   color: var(--accent);
   font-variant-numeric: tabular-nums;
+}
+
+.inline-section-number {
+  display: inline-block;
+  margin-right: 0.55rem;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
 }
 
 .support-pill {
