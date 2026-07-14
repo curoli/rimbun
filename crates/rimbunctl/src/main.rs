@@ -29,14 +29,15 @@ const SERVICE_ORDER: [ServiceName; 4] = [
 
 #[derive(Debug, Parser)]
 #[command(name = "rimbunctl")]
-struct ProfileCli {
-    profile: String,
+struct Cli {
+    profile: Option<String>,
     #[command(subcommand)]
-    command: ProfileCommandKind,
+    command: CommandKind,
 }
 
 #[derive(Debug, Subcommand)]
-enum ProfileCommandKind {
+enum CommandKind {
+    ListProfiles,
     ListUsers,
     ExportContributions {
         username: String,
@@ -80,18 +81,6 @@ enum ProfileCommandKind {
         username: String,
         new_password: String,
     },
-}
-
-#[derive(Debug, Parser)]
-#[command(name = "rimbunctl")]
-struct RootCli {
-    #[command(subcommand)]
-    command: RootCommandKind,
-}
-
-#[derive(Debug, Subcommand)]
-enum RootCommandKind {
-    ListProfiles,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
@@ -1326,32 +1315,36 @@ fn run() -> Result<()> {
     let repo_root = repo_root()?;
     let registry = load_registry(&repo_root)?;
 
-    if matches!(env::args().nth(1).as_deref(), Some("list-profiles")) {
-        let cli = RootCli::parse();
-        match cli.command {
-            RootCommandKind::ListProfiles => {
-                list_profiles(&registry);
-                return Ok(());
-            }
-        }
+    let cli = Cli::parse();
+
+    if matches!(cli.command, CommandKind::ListProfiles) {
+        list_profiles(&registry);
+        return Ok(());
     }
 
-    let cli = ProfileCli::parse();
-    let profile = resolve_profile(&registry, &cli.profile)?;
+    let profile_name = cli
+        .profile
+        .ok_or_else(|| anyhow!("profile is required for this command"))?;
+
+    let profile = resolve_profile(&registry, &profile_name)?;
     let paths = state_paths(&profile.state_namespace)?;
     ensure_state_dirs(&paths)?;
 
     match cli.command {
-        ProfileCommandKind::ListUsers => list_users(&paths, &profile)?,
-        ProfileCommandKind::ExportContributions { username, file } => {
+        CommandKind::ListProfiles => {
+            list_profiles(&registry);
+            return Ok(());
+        }
+        CommandKind::ListUsers => list_users(&paths, &profile)?,
+        CommandKind::ExportContributions { username, file } => {
             export_contributions(&registry, &paths, &profile, &username, file.as_deref())?
         }
-        ProfileCommandKind::ImportContributions {
+        CommandKind::ImportContributions {
             username,
             file,
             publish,
         } => import_contributions(&registry, &paths, &profile, &username, &file, publish)?,
-        ProfileCommandKind::Start { service } => {
+        CommandKind::Start { service } => {
             print_profile_endpoints(&profile);
             for service in dependency_order(&profile, &service)? {
                 start_service(&registry, &paths, &profile, service)?;
@@ -1360,14 +1353,14 @@ fn run() -> Result<()> {
                 }
             }
         }
-        ProfileCommandKind::Stop { service } => {
+        CommandKind::Stop { service } => {
             let mut order = dependency_order(&profile, &service)?;
             order.reverse();
             for service in order {
                 stop_service(&paths, &profile, service)?;
             }
         }
-        ProfileCommandKind::Restart { service } => {
+        CommandKind::Restart { service } => {
             print_profile_endpoints(&profile);
             let order = dependency_order(&profile, &service)?;
             for service in order.iter().rev().copied() {
@@ -1380,18 +1373,18 @@ fn run() -> Result<()> {
                 }
             }
         }
-        ProfileCommandKind::Log { service, follow } => show_logs(&paths, &service, follow)?,
-        ProfileCommandKind::Backup { name } => {
+        CommandKind::Log { service, follow } => show_logs(&paths, &service, follow)?,
+        CommandKind::Backup { name } => {
             create_backup(&registry, &paths, &profile, name.as_deref())?
         }
-        ProfileCommandKind::Restore { backup } => {
+        CommandKind::Restore { backup } => {
             restore_backup(&registry, &paths, &profile, &backup)?
         }
-        ProfileCommandKind::SetPassword {
+        CommandKind::SetPassword {
             username,
             new_password,
         } => set_password(&paths, &profile, &username, &new_password)?,
-        ProfileCommandKind::SetRole { username, role } => {
+        CommandKind::SetRole { username, role } => {
             set_role(&paths, &profile, &username, &role)?
         }
     }
