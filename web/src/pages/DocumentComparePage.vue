@@ -523,7 +523,18 @@ async function loadSectionCompares(sectionIds: string[]) {
         if (!section?.has_own_text) {
           return [sectionId, null] as const;
         }
-        return [sectionId, await getSectionCompare(sectionId)] as const;
+
+        try {
+          return [sectionId, await getSectionCompare(sectionId)] as const;
+        } catch (compareError) {
+          if (
+            compareError instanceof Error
+            && compareError.message.toLowerCase().includes("no published main submission")
+          ) {
+            return [sectionId, null] as const;
+          }
+          throw compareError;
+        }
       }),
     );
     sectionCompares.value = Object.fromEntries(entries);

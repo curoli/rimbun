@@ -152,19 +152,21 @@ pub async fn section_compare(
             )
         })
         .collect::<Vec<_>>();
-    let alternative_normalized = alternative_documents
+    let blocks = match alternative_documents
         .iter()
         .map(|document| {
             normalize_document(document, &options)
                 .map(|normalized| (document.id.clone().unwrap_or_default(), normalized))
         })
         .collect::<Result<HashMap<_, _>, _>>()
-        .map_err(|err| ApiError::internal(format!("markalign normalize failed: {err:?}")))?;
-
-    let comparison_set = compare_many(&main_document, &alternative_documents, &options)
-        .map_err(|err| ApiError::internal(format!("markalign compare failed: {err:?}")))?;
-
-    let blocks = map_compare_blocks(&comparison_set, &alternatives, &alternative_normalized);
+    {
+        Ok(alternative_normalized) => match compare_many(&main_document, &alternative_documents, &options)
+        {
+            Ok(comparison_set) => map_compare_blocks(&comparison_set, &alternatives, &alternative_normalized),
+            Err(_) => fallback_blocks_from_markdown(&main.submission.markdown_content),
+        },
+        Err(_) => fallback_blocks_from_markdown(&main.submission.markdown_content),
+    };
 
     Ok(Json(SectionCompareDto {
         section_id: section.id,
@@ -192,11 +194,13 @@ fn projected_submissions<'a>(
         .iter()
         .map(|submission| (submission.id, submission))
         .collect::<HashMap<_, _>>();
+    let mut seen = std::collections::HashSet::new();
 
     let mut projected = projection
         .iter()
         .filter_map(|item| {
             let submission = by_id.get(&item.submission_id)?;
+            seen.insert(submission.id);
             Some(ProjectedSubmission {
                 submission,
                 role: item.role.as_str(),
@@ -206,6 +210,27 @@ fn projected_submissions<'a>(
         })
         .collect::<Vec<_>>();
     projected.sort_by_key(|entry| entry.rank);
+
+    let mut fallback_rank = projected.len();
+    for (index, submission) in active_submissions.iter().enumerate() {
+        if seen.contains(&submission.id) {
+            continue;
+        }
+
+        let role = if projected.is_empty() && index == 0 {
+            "main"
+        } else {
+            "other"
+        };
+        projected.push(ProjectedSubmission {
+            submission,
+            role,
+            rank: fallback_rank,
+            support_percent: None,
+        });
+        fallback_rank += 1;
+    }
+
     projected
 }
 
@@ -292,6 +317,28 @@ fn map_block_anchor(anchor: &BlockAnchor) -> BlockAnchorDto {
         block_key: anchor.block_key.clone(),
         list_item_index: anchor.list_item_index,
     }
+}
+
+fn fallback_blocks_from_markdown(markdown: &str) -> Vec<CompareBlockDto> {
+    let trimmed = markdown.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+
+    vec![CompareBlockDto {
+        block_index: 0,
+        block_kind: "paragraph".to_owned(),
+        anchor: BlockAnchorDto {
+            block_path: vec![0],
+            heading_path: vec![],
+            stable_block_path: vec!["fallback".to_owned()],
+            stable_heading_path: vec![],
+            block_key: "fallback-0".to_owned(),
+            list_item_index: None,
+        },
+        main_text: trimmed.to_owned(),
+        variants: Vec::new(),
+    }]
 }
 
 fn block_kind_label(kind: &BlockKind) -> String {
@@ -626,5 +673,37 @@ mod tests {
         assert_eq!(variants[0].reference_end, Some(4));
         assert_eq!(variants[0].reference_text, None);
         assert!(variants[0].text.contains("große"));
+    }
+
+    #[test]
+    fn projected_submissions_falls_back_to_active_submissions_when_projection_is_empty() {
+        let submission = submissions::SubmissionRecord {
+            id: uuid::Uuid::new_v4(),
+            section_id: uuid::Uuid::new_v4(),
+            user_id: uuid::Uuid::new_v4(),
+            username: "jati".to_owned(),
+            display_name: "Jati".to_owned(),
+            base_submission_id: None,
+            markdown_content: "Ayat".to_owned(),
+            status: "published".to_owned(),
+            published_at: Utc::now(),
+            superseded_by: None,
+        };
+
+        let submissions = [submission];
+        let projected = projected_submissions(&[], &submissions);
+
+        assert_eq!(projected.len(), 1);
+        assert_eq!(projected[0].role, "main");
+        assert_eq!(projected[0].rank, 0);
+    }
+
+    #[test]
+    fn fallback_blocks_from_markdown_returns_single_plain_block() {
+        let blocks = fallback_blocks_from_markdown("Alpha\n\nBeta");
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].block_kind, "paragraph");
+        assert_eq!(blocks[0].main_text, "Alpha\n\nBeta");
+        assert!(blocks[0].variants.is_empty());
     }
 }
