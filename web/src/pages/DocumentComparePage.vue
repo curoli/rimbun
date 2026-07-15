@@ -217,6 +217,10 @@ function showsInlineSectionNumber(item: SectionCompareItem, blockIndex: number) 
   return !item.section.has_heading && blockIndex === 0 && Boolean(item.number);
 }
 
+function showsEmptyStateSectionNumber(item: SectionCompareItem) {
+  return !item.section.has_heading && Boolean(item.number);
+}
+
 function inlineDiff(block: CompareBlockDto, alternativeText: string) {
   return buildInlineDiff(block.main_text, alternativeText);
 }
@@ -781,7 +785,15 @@ watch(readerPages, (pages) => {
                   </p>
                 </section>
               </div>
-              <p v-else-if="item.section.has_own_text" class="empty-note">No published version yet.</p>
+              <p v-else-if="item.section.has_own_text" class="empty-note">
+                <span
+                  v-if="showsEmptyStateSectionNumber(item)"
+                  class="inline-section-number"
+                >
+                  {{ item.number }}
+                </span>
+                No published version yet.
+              </p>
             </article>
           </div>
         </section>
