@@ -1,14 +1,14 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     env, fs,
-    io::ErrorKind,
-    net::TcpListener,
+    io::{BufRead, BufReader, ErrorKind, Write},
+    net::{SocketAddr, TcpListener, TcpStream},
     os::unix::process::CommandExt,
     path::{Path, PathBuf},
     process::ExitCode,
     process::{Command, Stdio},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -26,6 +26,9 @@ const SERVICE_ORDER: [ServiceName; 4] = [
     ServiceName::Backend,
     ServiceName::Frontend,
 ];
+const READINESS_TIMEOUT: Duration = Duration::from_secs(300);
+const READINESS_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const READINESS_REPORT_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Parser)]
 #[command(name = "rimbunctl")]
@@ -841,11 +844,106 @@ fn start_logged_command(
         },
     )?;
     println!(
-        "Started {} for profile {}",
+        "Started {} process for profile {}",
         service.as_str(),
         profile.profile_name
     );
     Ok(())
+}
+
+fn http_service_ready(port: u16, path: &str) -> bool {
+    let address = SocketAddr::from(([127, 0, 0, 1], port));
+    let Ok(mut stream) = TcpStream::connect_timeout(&address, Duration::from_millis(500)) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
+
+    let request =
+        format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+
+    let mut status_line = String::new();
+    if BufReader::new(stream).read_line(&mut status_line).is_err() {
+        return false;
+    }
+
+    matches!(
+        status_line.split_whitespace().nth(1),
+        Some(code) if code.starts_with('2')
+    )
+}
+
+fn service_ready(paths: &Paths, profile: &ResolvedProfile, service: ServiceName) -> Result<bool> {
+    match service {
+        ServiceName::Db => {
+            let output = shell_command(
+                "docker compose exec -T postgres pg_isready -U postgres -d postgres",
+                &paths.repo_root,
+                &profile.env,
+            )
+            .output()?;
+            Ok(output.status.success())
+        }
+        ServiceName::Embedding => Ok(expected_service_port(profile, service)
+            .is_some_and(|port| http_service_ready(port, "/health"))),
+        ServiceName::Backend => Ok(expected_service_port(profile, service)
+            .is_some_and(|port| http_service_ready(port, "/health"))),
+        ServiceName::Frontend => Ok(expected_service_port(profile, service)
+            .is_some_and(|port| http_service_ready(port, "/"))),
+    }
+}
+
+fn wait_for_service_ready(
+    paths: &Paths,
+    profile: &ResolvedProfile,
+    service: ServiceName,
+) -> Result<()> {
+    println!("Waiting for {} to become ready...", service.as_str());
+    let started_at = Instant::now();
+    let mut next_report = READINESS_REPORT_INTERVAL;
+
+    loop {
+        if !service_status(paths, service)? {
+            bail!(
+                "'{}' exited before becoming ready; inspect {}",
+                service.as_str(),
+                log_path(paths, service).display()
+            );
+        }
+
+        if service_ready(paths, profile, service)? {
+            println!(
+                "Ready: {} for profile {} ({:.1}s)",
+                service.as_str(),
+                profile.profile_name,
+                started_at.elapsed().as_secs_f64()
+            );
+            return Ok(());
+        }
+
+        let elapsed = started_at.elapsed();
+        if elapsed >= READINESS_TIMEOUT {
+            bail!(
+                "'{}' did not become ready within {} seconds; inspect {}",
+                service.as_str(),
+                READINESS_TIMEOUT.as_secs(),
+                log_path(paths, service).display()
+            );
+        }
+        if elapsed >= next_report {
+            println!(
+                "Still waiting for {} ({:.0}s elapsed)...",
+                service.as_str(),
+                elapsed.as_secs_f64()
+            );
+            next_report += READINESS_REPORT_INTERVAL;
+        }
+
+        thread::sleep(READINESS_POLL_INTERVAL);
+    }
 }
 
 fn stop_logged_command(paths: &Paths, service: ServiceName) -> Result<()> {
@@ -950,7 +1048,7 @@ fn start_service(
 ) -> Result<()> {
     if service_status(paths, service)? {
         println!("{} already running", service.as_str());
-        return Ok(());
+        return wait_for_service_ready(paths, profile, service);
     }
 
     println!(
@@ -990,7 +1088,8 @@ fn start_service(
     if let Some(bootstrap) = &config.bootstrap {
         run_shell(bootstrap, &workdir, &profile.env)?;
     }
-    start_logged_command(paths, profile, service, &workdir, &config.run)
+    start_logged_command(paths, profile, service, &workdir, &config.run)?;
+    wait_for_service_ready(paths, profile, service)
 }
 
 fn stop_service(paths: &Paths, profile: &ResolvedProfile, service: ServiceName) -> Result<()> {
@@ -1352,6 +1451,7 @@ fn run() -> Result<()> {
                     ensure_profile_database(&paths, &profile)?;
                 }
             }
+            println!("\nAll requested services are ready for profile {profile_name}.");
         }
         CommandKind::Stop { service } => {
             let mut order = dependency_order(&profile, &service)?;
@@ -1372,21 +1472,18 @@ fn run() -> Result<()> {
                     ensure_profile_database(&paths, &profile)?;
                 }
             }
+            println!("\nAll requested services are ready for profile {profile_name}.");
         }
         CommandKind::Log { service, follow } => show_logs(&paths, &service, follow)?,
         CommandKind::Backup { name } => {
             create_backup(&registry, &paths, &profile, name.as_deref())?
         }
-        CommandKind::Restore { backup } => {
-            restore_backup(&registry, &paths, &profile, &backup)?
-        }
+        CommandKind::Restore { backup } => restore_backup(&registry, &paths, &profile, &backup)?,
         CommandKind::SetPassword {
             username,
             new_password,
         } => set_password(&paths, &profile, &username, &new_password)?,
-        CommandKind::SetRole { username, role } => {
-            set_role(&paths, &profile, &username, &role)?
-        }
+        CommandKind::SetRole { username, role } => set_role(&paths, &profile, &username, &role)?,
     }
 
     Ok(())
@@ -1400,5 +1497,42 @@ fn main() -> ExitCode {
             eprintln!("{error:#}");
             ExitCode::from(1)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Read;
+
+    fn serve_status(status: &str) -> (u16, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind test listener");
+        let port = listener.local_addr().expect("read test address").port();
+        let response = format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\n\r\n");
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept readiness probe");
+            let mut request = [0_u8; 512];
+            let _ = stream.read(&mut request);
+            stream
+                .write_all(response.as_bytes())
+                .expect("write readiness response");
+        });
+        (port, handle)
+    }
+
+    #[test]
+    fn http_service_ready_accepts_success_status() {
+        let (port, server) = serve_status("200 OK");
+
+        assert!(http_service_ready(port, "/health"));
+        server.join().expect("join test server");
+    }
+
+    #[test]
+    fn http_service_ready_rejects_error_status() {
+        let (port, server) = serve_status("503 Service Unavailable");
+
+        assert!(!http_service_ready(port, "/health"));
+        server.join().expect("join test server");
     }
 }

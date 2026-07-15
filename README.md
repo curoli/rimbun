@@ -172,6 +172,9 @@ Examples:
 ```
 
 `rimbunctl` is implemented as a Rust CLI with a thin launcher script at the repository root.
+For `start` and `restart`, it waits until every requested service actually responds before
+reporting success. Longer starts print periodic progress updates; the readiness timeout is five
+minutes, which also covers backend recompilation in development.
 
 It now supports reusable `fragments` and concrete `profiles`.
 
