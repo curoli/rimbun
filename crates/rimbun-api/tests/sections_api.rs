@@ -1282,14 +1282,16 @@ async fn section_compare_returns_ranked_block_variants() {
             format!("rimbun_session={session_a}"),
             json!({
                 "base_submission_id": null,
-                "markdown_content": "# Heading\n\nShared opening paragraph.\n\nA-specific ending."
+                "markdown_content": "# Heading\n\nShared opening paragraph.\n\nA-specific ending.",
+                "main_comment_markdown": "Why this version is structured this way."
             }),
         ),
         (
             format!("rimbun_session={session_b}"),
             json!({
                 "base_submission_id": null,
-                "markdown_content": "# Heading\n\nShared opening paragraph.\n\nB-specific ending."
+                "markdown_content": "# Heading\n\nShared opening paragraph.\n\nB-specific ending.",
+                "main_comment_markdown": null
             }),
         ),
     ] {
@@ -1331,12 +1333,20 @@ async fn section_compare_returns_ranked_block_variants() {
     assert_eq!(compare_json["section_id"], section_id.to_string());
     assert_eq!(compare_json["section_number"], "1");
     assert!(compare_json["main_submission"]["submission_id"].is_string());
+    assert!(compare_json["main_submission"]["markdown_content"].is_string());
     assert_eq!(
         compare_json["alternatives"]
             .as_array()
             .expect("alternatives array")
             .len(),
         1
+    );
+    let comments = compare_json["comments"].as_array().expect("comments array");
+    assert_eq!(comments.len(), 1);
+    assert_eq!(comments[0]["is_primary"], true);
+    assert_eq!(
+        comments[0]["markdown_content"],
+        "Why this version is structured this way."
     );
 
     let blocks = compare_json["blocks"].as_array().expect("blocks array");

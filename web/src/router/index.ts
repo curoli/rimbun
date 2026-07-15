@@ -4,6 +4,7 @@ import AdminUsersPage from "../pages/AdminUsersPage.vue";
 import AdminVariantCollectionsPage from "../pages/AdminVariantCollectionsPage.vue";
 import AdminSiteSettingsPage from "../pages/AdminSiteSettingsPage.vue";
 import DocumentOutlinePage from "../pages/DocumentOutlinePage.vue";
+import DocumentCommentsPage from "../pages/DocumentCommentsPage.vue";
 import DocumentPage from "../pages/DocumentPage.vue";
 import DocumentSettingsPage from "../pages/DocumentSettingsPage.vue";
 import DocumentsPage from "../pages/DocumentsPage.vue";
@@ -21,6 +22,7 @@ export const router = createRouter({
     { path: "/admin/variant-collections", component: AdminVariantCollectionsPage },
     { path: "/", component: DocumentsPage },
     { path: "/documents/:documentRef", component: DocumentPage },
+    { path: "/documents/:documentRef/comments", component: DocumentCommentsPage },
     { path: "/documents/:documentRef/compare", redirect: (to) => `/documents/${to.params.documentRef}` },
     { path: "/documents/:documentRef/outline", component: DocumentOutlinePage },
     { path: "/documents/:documentRef/settings", component: DocumentSettingsPage },

@@ -689,6 +689,17 @@ watch(readerPages, (pages) => {
                     <span v-if="item.compare?.alternatives.length" class="reader-badge">
                       {{ item.compare.alternatives.length }} {{ $t(item.compare.alternatives.length === 1 ? "alternative" : "alternatives") }}
                     </span>
+                    <RouterLink
+                      v-if="item.compare?.comments.length"
+                      class="reader-badge comment-link"
+                      :to="{
+                        path: `/documents/${documentData.document.slug}/comments`,
+                        query: { section: item.section.id },
+                      }"
+                    >
+                      {{ item.compare.comments.length }}
+                      {{ $t(item.compare.comments.length === 1 ? "comment" : "comments") }}
+                    </RouterLink>
                   </div>
                 </div>
                 <RouterLink
@@ -959,6 +970,16 @@ watch(readerPages, (pages) => {
   background: var(--accent-soft);
   color: var(--text-secondary);
   font-size: 0.88rem;
+}
+
+.comment-link {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.comment-link:hover {
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
 }
 
 .edit-link {

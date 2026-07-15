@@ -2,6 +2,7 @@
 import { computed, reactive } from "vue";
 
 import type { CommentRecord, ProjectionItemRecord, SubmissionRecord } from "../api/types";
+import MarkdownContent from "./MarkdownContent.vue";
 
 type CommentTreeNode = CommentRecord & {
   replies: CommentTreeNode[];
@@ -196,7 +197,7 @@ function submitReply(submissionId: string, parentCommentId: string) {
                   <time>{{ $date(comment.created_at) }}</time>
                 </div>
               </div>
-              <pre>{{ comment.markdown_content }}</pre>
+              <MarkdownContent class="comment-markdown" :source="comment.markdown_content" />
               <button v-if="canComment" class="reply-toggle" @click="replyTargets[comment.id] = !replyTargets[comment.id]">
                 {{ replyTargets[comment.id] ? $t("Cancel reply") : $t("Reply") }}
               </button>
@@ -210,7 +211,7 @@ function submitReply(submissionId: string, parentCommentId: string) {
                     <strong>{{ commentAuthorLabel(reply) }}</strong>
                     <time>{{ $date(reply.created_at) }}</time>
                   </div>
-                  <pre>{{ reply.markdown_content }}</pre>
+                  <MarkdownContent class="comment-markdown" :source="reply.markdown_content" />
                 </div>
               </div>
             </div>
@@ -261,7 +262,7 @@ function submitReply(submissionId: string, parentCommentId: string) {
                   <time>{{ $date(comment.created_at) }}</time>
                 </div>
               </div>
-              <pre>{{ comment.markdown_content }}</pre>
+              <MarkdownContent class="comment-markdown" :source="comment.markdown_content" />
               <button v-if="canComment" class="reply-toggle" @click="replyTargets[comment.id] = !replyTargets[comment.id]">
                 {{ replyTargets[comment.id] ? $t("Cancel reply") : $t("Reply") }}
               </button>
@@ -275,7 +276,7 @@ function submitReply(submissionId: string, parentCommentId: string) {
                     <strong>{{ commentAuthorLabel(reply) }}</strong>
                     <time>{{ $date(reply.created_at) }}</time>
                   </div>
-                  <pre>{{ reply.markdown_content }}</pre>
+                  <MarkdownContent class="comment-markdown" :source="reply.markdown_content" />
                 </div>
               </div>
             </div>
@@ -326,7 +327,7 @@ function submitReply(submissionId: string, parentCommentId: string) {
                   <time>{{ $date(comment.created_at) }}</time>
                 </div>
               </div>
-              <pre>{{ comment.markdown_content }}</pre>
+              <MarkdownContent class="comment-markdown" :source="comment.markdown_content" />
               <button v-if="canComment" class="reply-toggle" @click="replyTargets[comment.id] = !replyTargets[comment.id]">
                 {{ replyTargets[comment.id] ? $t("Cancel reply") : $t("Reply") }}
               </button>
@@ -340,7 +341,7 @@ function submitReply(submissionId: string, parentCommentId: string) {
                     <strong>{{ commentAuthorLabel(reply) }}</strong>
                     <time>{{ $date(reply.created_at) }}</time>
                   </div>
-                  <pre>{{ reply.markdown_content }}</pre>
+                  <MarkdownContent class="comment-markdown" :source="reply.markdown_content" />
                 </div>
               </div>
             </div>

@@ -13,7 +13,7 @@ use markalign::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    db::{documents, projections, sections, submissions},
+    db::{comments, documents, projections, sections, submissions},
     error::ApiError,
     http::extractors::maybe_current_user,
     state::AppState,
@@ -30,6 +30,7 @@ pub struct SectionCompareDto {
     pub section_number: String,
     pub main_submission: SubmissionSummaryDto,
     pub alternatives: Vec<SubmissionSummaryDto>,
+    pub comments: Vec<comments::CommentRecord>,
     pub blocks: Vec<CompareBlockDto>,
 }
 
@@ -40,6 +41,7 @@ pub struct SubmissionSummaryDto {
     pub user_id: uuid::Uuid,
     pub username: String,
     pub display_name: String,
+    pub markdown_content: String,
     pub published_at: DateTime<Utc>,
     pub rank: usize,
     pub support_percent: Option<f64>,
@@ -136,6 +138,13 @@ pub async fn section_compare(
         .filter(|entry| entry.submission.id != main.submission.id)
         .cloned()
         .collect::<Vec<_>>();
+    let submission_ids = projected
+        .iter()
+        .map(|entry| entry.submission.id)
+        .collect::<Vec<_>>();
+    let submission_comments = comments::list_by_submission_ids(&state.pool, &submission_ids)
+        .await
+        .map_err(|err| ApiError::internal(err.to_string()))?;
 
     let section_number = compute_section_number(&state, section.document_id, section.id).await?;
     let options = Options::default();
@@ -174,6 +183,7 @@ pub async fn section_compare(
         section_number,
         main_submission: map_submission_summary(&main),
         alternatives: alternatives.iter().map(map_submission_summary).collect(),
+        comments: submission_comments,
         blocks,
     }))
 }
@@ -240,6 +250,7 @@ fn map_submission_summary(entry: &ProjectedSubmission<'_>) -> SubmissionSummaryD
         user_id: entry.submission.user_id,
         username: entry.submission.username.clone(),
         display_name: entry.submission.display_name.clone(),
+        markdown_content: entry.submission.markdown_content.clone(),
         published_at: entry.submission.published_at,
         rank: entry.rank + 1,
         support_percent: entry.support_percent,

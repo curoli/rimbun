@@ -77,6 +77,10 @@ export type CommentRecord = {
   created_at: string;
 };
 
+export type CommentTreeNode = CommentRecord & {
+  replies: CommentTreeNode[];
+};
+
 export type ProjectionItemRecord = {
   section_id: string;
   submission_id: string;
@@ -110,6 +114,7 @@ export type SubmissionSummaryDto = {
   user_id: string;
   username: string;
   display_name: string;
+  markdown_content: string;
   published_at: string;
   rank: number;
   support_percent: number | null;
@@ -157,6 +162,7 @@ export type SectionCompareDto = {
   section_number: string;
   main_submission: SubmissionSummaryDto;
   alternatives: SubmissionSummaryDto[];
+  comments: CommentRecord[];
   blocks: CompareBlockDto[];
 };
 

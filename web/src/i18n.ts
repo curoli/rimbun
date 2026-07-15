@@ -271,6 +271,20 @@ const de: Record<string, string> = {
   "heading": "Überschrift",
   "list": "Liste",
   "code": "Code",
+  "Author's main comment": "Hauptkommentar des Verfassers",
+  "Read 1 comment": "1 Kommentar lesen",
+  "Read {count} comments": "{count} Kommentare lesen",
+  "Comments on the version by {author}": "Kommentare zur Version von {author}",
+  "comment": "Kommentar",
+  "comments": "Kommentare",
+  "No comments yet.": "Noch keine Kommentare.",
+  "Write a comment on this version.": "Schreibe einen Kommentar zu dieser Version.",
+  "Loading comments...": "Kommentare werden geladen...",
+  "Failed to load comments": "Kommentare konnten nicht geladen werden",
+  "Read and discuss the published versions of this section.": "Lies und diskutiere die veröffentlichten Versionen dieses Abschnitts.",
+  "Log in": "Melde dich an",
+  "to write a comment.": "um einen Kommentar zu schreiben.",
+  "Contribution": "Beitrag",
 };
 
 export function t(source: string, values: Record<string, string | number> = {}) {
