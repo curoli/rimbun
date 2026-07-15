@@ -10,8 +10,8 @@ function handleChange(event: Event) {
   <label class="language-selector">
     <span>{{ t("Language") }}</span>
     <select :value="currentLanguage" @change="handleChange">
-      <option value="de">{{ t("German") }}</option>
-      <option value="en">{{ t("English") }}</option>
+      <option value="de">🇩🇪 {{ t("German") }}</option>
+      <option value="en">🇬🇧 {{ t("English") }}</option>
     </select>
   </label>
 </template>

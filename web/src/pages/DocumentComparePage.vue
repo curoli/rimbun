@@ -691,7 +691,11 @@ watch(readerPages, (pages) => {
                     </span>
                   </div>
                 </div>
-                <RouterLink class="edit-link" :to="`/sections/${item.section.id}/edit`">
+                <RouterLink
+                  v-if="item.section.has_own_text"
+                  class="edit-link"
+                  :to="`/sections/${item.section.id}/edit`"
+                >
                   {{ $t("Edit this section") }}
                 </RouterLink>
               </header>
@@ -831,6 +835,34 @@ watch(readerPages, (pages) => {
 .compare-section-header h3,
 .empty-note {
   margin: 0;
+}
+
+.empty-note {
+  position: relative;
+  padding: 0.8rem 1rem 0.8rem 2.35rem;
+  border: 1px dashed color-mix(in srgb, var(--accent) 32%, var(--border-medium));
+  border-radius: 0.8rem;
+  background: color-mix(in srgb, var(--accent-soft) 34%, transparent);
+  color: var(--text-muted);
+  font-size: 0.92rem;
+  font-style: italic;
+  line-height: 1.45;
+}
+
+.empty-note::before {
+  content: "";
+  position: absolute;
+  left: 0.9rem;
+  top: 50%;
+  width: 0.58rem;
+  height: 0.58rem;
+  border: 2px solid color-mix(in srgb, var(--accent) 58%, transparent);
+  border-radius: 50%;
+  transform: translateY(-50%);
+}
+
+.empty-note .inline-section-number {
+  color: var(--text-muted);
 }
 
 .compare-sections,

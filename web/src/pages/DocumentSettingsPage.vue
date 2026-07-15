@@ -191,8 +191,8 @@ onMounted(async () => {
             {{ $t("Interface language") }}
             <select v-model="form.uiLanguage">
               <option value="global">{{ $t("Global default") }}</option>
-              <option value="de">{{ $t("German") }}</option>
-              <option value="en">{{ $t("English") }}</option>
+              <option value="de">🇩🇪 {{ $t("German") }}</option>
+              <option value="en">🇬🇧 {{ $t("English") }}</option>
             </select>
           </label>
         </div>
