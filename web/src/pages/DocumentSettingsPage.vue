@@ -6,6 +6,7 @@ import { getDocument, updateDocument } from "../api/documents";
 import type { DocumentDetailResponse } from "../api/types";
 import DocumentViewNav from "../components/DocumentViewNav.vue";
 import { useAuthStore } from "../stores/auth";
+import { setDocumentLanguage } from "../i18n";
 
 const route = useRoute();
 const router = useRouter();
@@ -21,6 +22,7 @@ const form = reactive({
   slug: "",
   visibility: "authenticated" as "public" | "authenticated",
   paginationLevel: "none",
+  uiLanguage: "global" as "global" | "de" | "en",
 });
 
 const canManageDocument = computed(() =>
@@ -33,6 +35,7 @@ function syncForm() {
     form.slug = "";
     form.visibility = "authenticated";
     form.paginationLevel = "none";
+    form.uiLanguage = "global";
     return;
   }
 
@@ -44,6 +47,8 @@ function syncForm() {
     typeof rawPaginationLevel === "number" && rawPaginationLevel > 0
       ? String(rawPaginationLevel)
       : "none";
+  const rawUiLanguage = documentData.value.document.markdown_policy?.ui_language;
+  form.uiLanguage = rawUiLanguage === "de" || rawUiLanguage === "en" ? rawUiLanguage : "global";
 }
 
 async function loadDocument() {
@@ -87,12 +92,14 @@ async function handleSave() {
       markdown_policy: {
         ...documentData.value.document.markdown_policy,
         pagination_level: form.paginationLevel === "none" ? null : Number(form.paginationLevel),
+        ui_language: form.uiLanguage === "global" ? null : form.uiLanguage,
       },
     });
     documentData.value = {
       ...documentData.value,
       document: updated,
     };
+    setDocumentLanguage(updated.markdown_policy?.ui_language);
     if (route.params.documentRef !== updated.slug) {
       await router.replace(`/documents/${updated.slug}/settings`);
     }
@@ -123,12 +130,12 @@ onMounted(async () => {
 
 <template>
   <main class="document-page">
-    <p v-if="isLoadingDocument">Loading document...</p>
-    <p v-else-if="error && !documentData" class="error">{{ error }}</p>
+    <p v-if="isLoadingDocument">{{ $t("Loading document...") }}</p>
+    <p v-else-if="error && !documentData" class="error">{{ $t(error) }}</p>
     <template v-else-if="documentData">
       <section class="document-header">
         <div>
-          <p class="eyebrow">{{ documentData.document.visibility }}</p>
+          <p class="eyebrow">{{ $t(documentData.document.visibility) }}</p>
           <h1>{{ documentData.document.title }}</h1>
         </div>
         <div class="document-header-meta">
@@ -144,40 +151,48 @@ onMounted(async () => {
       <section class="settings-panel">
         <div class="panel-heading">
           <div>
-            <h2>Document Settings</h2>
-            <p>Update the document title, slug, visibility, and reader pagination.</p>
+            <h2>{{ $t("Document Settings") }}</h2>
+            <p>{{ $t("Update the document title, slug, visibility, reader pagination, and default interface language.") }}</p>
           </div>
           <button type="button" :disabled="saveState === 'saving'" @click="handleSave">
-            {{ saveState === "saving" ? "Saving..." : "Save settings" }}
+            {{ saveState === "saving" ? $t("Saving...") : $t("Save settings") }}
           </button>
         </div>
 
-        <p v-if="error" class="error">{{ error }}</p>
+        <p v-if="error" class="error">{{ $t(error) }}</p>
 
         <div class="form-grid">
           <label>
-            Title
+            {{ $t("Title") }}
             <input v-model="form.title" type="text" />
           </label>
           <label>
-            Slug
+            {{ $t("Slug") }}
             <input v-model="form.slug" type="text" />
           </label>
           <label>
-            Visibility
+            {{ $t("Visibility") }}
             <select v-model="form.visibility">
-              <option value="authenticated">authenticated</option>
-              <option value="public">public</option>
+              <option value="authenticated">{{ $t("authenticated") }}</option>
+              <option value="public">{{ $t("public") }}</option>
             </select>
           </label>
           <label>
-            Pagination level
+            {{ $t("Pagination level") }}
             <select v-model="form.paginationLevel">
-              <option value="none">No pagination</option>
-              <option value="1">Level 1 sections</option>
-              <option value="2">Level 2 sections</option>
-              <option value="3">Level 3 sections</option>
-              <option value="4">Level 4 sections</option>
+              <option value="none">{{ $t("No pagination") }}</option>
+              <option value="1">{{ $t("Level 1 sections") }}</option>
+              <option value="2">{{ $t("Level 2 sections") }}</option>
+              <option value="3">{{ $t("Level 3 sections") }}</option>
+              <option value="4">{{ $t("Level 4 sections") }}</option>
+            </select>
+          </label>
+          <label>
+            {{ $t("Interface language") }}
+            <select v-model="form.uiLanguage">
+              <option value="global">{{ $t("Global default") }}</option>
+              <option value="de">{{ $t("German") }}</option>
+              <option value="en">{{ $t("English") }}</option>
             </select>
           </label>
         </div>

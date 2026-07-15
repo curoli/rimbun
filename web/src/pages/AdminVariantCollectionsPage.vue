@@ -267,35 +267,35 @@ onMounted(async () => {
   <main class="variant-lab-page">
     <section class="admin-header">
       <div>
-        <p class="eyebrow">Admin</p>
-        <h1>Variant Collections</h1>
+        <p class="eyebrow">{{ $t("Admin") }}</p>
+        <h1>{{ $t("Variant Collections") }}</h1>
       </div>
-      <p class="admin-copy">Reusable text variants for generating test documents and test users.</p>
+      <p class="admin-copy">{{ $t("Reusable text variants for generating test documents and test users.") }}</p>
     </section>
 
-    <p v-if="error" class="error">{{ error }}</p>
+    <p v-if="error" class="error">{{ $t(error) }}</p>
 
     <section class="lab-layout">
       <aside class="collection-sidebar">
         <form class="sidebar-panel" @submit.prevent="handleCreateCollection">
-          <h2>New Collection</h2>
+          <h2>{{ $t("New Collection") }}</h2>
           <label>
-            <span>Name</span>
+            <span>{{ $t("Name") }}</span>
             <input v-model="createCollectionName" type="text" />
           </label>
           <label>
-            <span>Description</span>
+            <span>{{ $t("Description") }}</span>
             <textarea v-model="createCollectionDescription" rows="3" />
           </label>
-          <button type="submit" :disabled="isSaving">Create</button>
+          <button type="submit" :disabled="isSaving">{{ $t("Create") }}</button>
         </form>
 
         <section class="sidebar-panel">
           <div class="panel-heading">
-            <h2>Collections</h2>
+            <h2>{{ $t("Collections") }}</h2>
             <span>{{ collections.length }}</span>
           </div>
-          <p v-if="isLoading">Loading collections...</p>
+          <p v-if="isLoading">{{ $t("Loading collections...") }}</p>
           <div v-else class="collection-list">
             <button
               v-for="item in collections"
@@ -306,7 +306,7 @@ onMounted(async () => {
               @click="selectedCollectionId = item.collection.id"
             >
               <strong>{{ item.collection.name }}</strong>
-              <small>{{ item.entries.length }} variants</small>
+              <small>{{ item.entries.length }} {{ $t(item.entries.length === 1 ? "variant" : "variants") }}</small>
             </button>
           </div>
         </section>
@@ -315,27 +315,27 @@ onMounted(async () => {
       <section v-if="selectedCollection" class="workspace">
         <section class="workspace-panel">
           <div class="panel-heading">
-            <h2>Collection</h2>
+            <h2>{{ $t("Collection") }}</h2>
             <div class="action-row">
-              <button type="button" class="danger" :disabled="isSaving" @click="handleDeleteCollection">Delete</button>
-              <button type="button" :disabled="isSaving" @click="handleRunCollection">Create test document</button>
+              <button type="button" class="danger" :disabled="isSaving" @click="handleDeleteCollection">{{ $t("Delete") }}</button>
+              <button type="button" :disabled="isSaving" @click="handleRunCollection">{{ $t("Create test document") }}</button>
             </div>
           </div>
 
           <label>
-            <span>Name</span>
+            <span>{{ $t("Name") }}</span>
             <input v-model="collectionName" type="text" />
           </label>
           <label>
-            <span>Description</span>
+            <span>{{ $t("Description") }}</span>
             <textarea v-model="collectionDescription" rows="3" />
           </label>
-          <button type="button" :disabled="isSaving" @click="handleSaveCollection">Save collection</button>
+          <button type="button" :disabled="isSaving" @click="handleSaveCollection">{{ $t("Save collection") }}</button>
         </section>
 
         <section class="workspace-panel">
           <div class="panel-heading">
-            <h2>Variants</h2>
+            <h2>{{ $t("Variants") }}</h2>
             <span>{{ selectedCollection.entries.length }}</span>
           </div>
 
@@ -357,7 +357,7 @@ onMounted(async () => {
                     :disabled="isSaving"
                     @click="openEntryEditor(entry.id)"
                   >
-                    Edit
+                    {{ $t("Edit") }}
                   </button>
                   <button
                     v-if="isEntryEditorOpen(entry.id)"
@@ -366,7 +366,7 @@ onMounted(async () => {
                     :disabled="isSaving"
                     @click="closeEntryEditor(entry.id)"
                   >
-                    Cancel
+                    {{ $t("Cancel") }}
                   </button>
                   <button
                     type="button"
@@ -374,18 +374,18 @@ onMounted(async () => {
                     :disabled="isSaving"
                     @click="handleDeleteEntry(entry.id)"
                   >
-                    Delete
+                    {{ $t("Delete") }}
                   </button>
                 </div>
               </div>
               <template v-if="isEntryEditorOpen(entry.id)">
                 <label>
-                  <span>Markdown</span>
+                  <span>{{ $t("Markdown") }}</span>
                   <textarea v-model="entryDrafts[entry.id]" rows="10" />
                 </label>
                 <div class="action-row action-row-end">
                   <button type="button" :disabled="isSaving" @click="handleUpdateEntry(entry.id)">
-                    Save variant
+                    {{ $t("Save Variant") }}
                   </button>
                 </div>
               </template>
@@ -395,16 +395,16 @@ onMounted(async () => {
 
           <div class="entry-card entry-card-new">
             <div class="entry-heading">
-              <h3>New Variant</h3>
-              <small>Metadata will be generated automatically when you add it.</small>
+              <h3>{{ $t("New Variant") }}</h3>
+              <small>{{ $t("Metadata will be generated automatically when you add it.") }}</small>
             </div>
             <label>
-              <span>Markdown</span>
+              <span>{{ $t("Markdown") }}</span>
               <textarea v-model="newEntryMarkdown" rows="10" />
             </label>
             <div class="action-row action-row-end">
               <button type="button" :disabled="isSaving" @click="handleSaveEntry">
-                Add variant
+                {{ $t("Add variant") }}
               </button>
             </div>
           </div>
@@ -412,15 +412,15 @@ onMounted(async () => {
 
         <section class="workspace-panel">
           <div class="panel-heading">
-            <h2>Test Runs</h2>
+            <h2>{{ $t("Test Runs") }}</h2>
             <span>{{ selectedCollection.runs.length }}</span>
           </div>
 
           <div v-if="selectedCollection.runs.length" class="run-list">
             <article v-for="run in selectedCollection.runs" :key="run.id" class="run-card">
               <div>
-                <strong>{{ new Date(run.created_at).toLocaleString() }}</strong>
-                <small>{{ run.status }}</small>
+                <strong>{{ $date(run.created_at) }}</strong>
+                <small>{{ $t(run.status) }}</small>
               </div>
               <div class="action-row">
                 <RouterLink
@@ -428,7 +428,7 @@ onMounted(async () => {
                   class="link-button"
                   :to="`/documents/${run.document_id}`"
                 >
-                  Open document
+                  {{ $t("Open document") }}
                 </RouterLink>
                 <button
                   v-if="run.status === 'active'"
@@ -437,12 +437,12 @@ onMounted(async () => {
                   :disabled="isSaving"
                   @click="handleDeleteRun(run.id)"
                 >
-                  Delete run
+                  {{ $t("Delete run") }}
                 </button>
               </div>
             </article>
           </div>
-          <p v-else>No test runs yet.</p>
+          <p v-else>{{ $t("No test runs yet.") }}</p>
         </section>
       </section>
     </section>

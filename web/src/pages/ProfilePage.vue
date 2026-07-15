@@ -105,70 +105,70 @@ onMounted(async () => {
   <main class="profile-page">
     <section class="profile-header">
       <div>
-        <p class="eyebrow">Profile</p>
-        <h1>Your account</h1>
+        <p class="eyebrow">{{ $t("Profile") }}</p>
+        <h1>{{ $t("Your account") }}</h1>
       </div>
       <p class="profile-copy">
-        Review your account details and update your display name or password.
+        {{ $t("Review your account details and update your display name or password.") }}
       </p>
     </section>
 
     <section class="profile-grid">
       <form class="profile-card" @submit.prevent="handleUpdateProfile">
         <div>
-          <h2>Profile details</h2>
-          <p class="card-copy">Username, email, and role are currently read-only. You can change your display name.</p>
+          <h2>{{ $t("Profile details") }}</h2>
+          <p class="card-copy">{{ $t("Username, email, and role are currently read-only. You can change your display name.") }}</p>
         </div>
 
         <label>
-          Username
+          {{ $t("Username") }}
           <input v-model="profileForm.username" disabled />
         </label>
 
         <label>
-          Email
+          {{ $t("Email") }}
           <input v-model="profileForm.email" disabled />
         </label>
 
         <label>
-          Role
+          {{ $t("Role") }}
           <input v-model="profileForm.role" disabled />
         </label>
 
         <label>
-          Display name
+          {{ $t("Display name") }}
           <input v-model="profileForm.display_name" />
         </label>
 
-        <p v-if="profileError" class="error">{{ profileError }}</p>
+        <p v-if="profileError" class="error">{{ $t(profileError) }}</p>
         <button class="solid" :disabled="profileState === 'saving' || !profileForm.display_name.trim()">
-          {{ profileState === "saving" ? "Saving..." : "Save profile" }}
+          {{ profileState === "saving" ? $t("Saving...") : $t("Save profile") }}
         </button>
       </form>
 
       <form class="profile-card" @submit.prevent="handleChangePassword">
         <div>
-          <h2>Password</h2>
-          <p class="card-copy">Change your password by entering the current one and confirming the new one.</p>
+          <h2>{{ $t("Password") }}</h2>
+          <p class="card-copy">{{ $t("Change your password by entering the current one and confirming the new one.") }}</p>
         </div>
 
         <label>
-          Current password
+          {{ $t("Current password") }}
           <input v-model="passwordForm.current_password" type="password" />
         </label>
 
         <label>
-          New password
+          {{ $t("New password") }}
           <input v-model="passwordForm.new_password" type="password" />
         </label>
 
         <label>
-          Confirm new password
+          {{ $t("Confirm new password") }}
           <input v-model="passwordForm.confirm_password" type="password" />
         </label>
 
-        <p v-if="passwordError" class="error">{{ passwordError }}</p>
-        <p v-if="passwordSuccess" class="success">{{ passwordSuccess }}</p>
+        <p v-if="passwordError" class="error">{{ $t(passwordError) }}</p>
+        <p v-if="passwordSuccess" class="success">{{ $t(passwordSuccess) }}</p>
         <button
           class="solid"
           :disabled="
@@ -178,7 +178,7 @@ onMounted(async () => {
             !passwordForm.confirm_password
           "
         >
-          {{ passwordState === "saving" ? "Saving..." : "Change password" }}
+          {{ passwordState === "saving" ? $t("Saving...") : $t("Change password") }}
         </button>
       </form>
     </section>

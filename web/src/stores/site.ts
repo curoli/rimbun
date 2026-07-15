@@ -3,6 +3,7 @@ import { defineStore } from "pinia";
 import * as siteSettingsApi from "../api/siteSettings";
 import type { SiteSettings } from "../api/types";
 import { DEFAULT_SITE_COLOR_SCHEME, isSiteColorScheme } from "../site-theme";
+import { setSiteLanguage } from "../i18n";
 
 type SiteState = {
   settings: SiteSettings | null;
@@ -15,6 +16,7 @@ const DEFAULT_SETTINGS: SiteSettings = {
   brand_name: "Rimbun",
   browser_title: "Rimbun",
   color_scheme: DEFAULT_SITE_COLOR_SCHEME,
+  default_language: "en",
   updated_at: "",
 };
 
@@ -26,6 +28,7 @@ function applySiteSettings(settings: SiteSettings | null) {
   const theme = settings?.color_scheme;
   document.documentElement.dataset.rimbunTheme =
     theme && isSiteColorScheme(theme) ? theme : DEFAULT_SITE_COLOR_SCHEME;
+  setSiteLanguage(settings?.default_language === "de" ? "de" : "en");
 }
 
 export const useSiteStore = defineStore("site", {
@@ -45,6 +48,9 @@ export const useSiteStore = defineStore("site", {
     colorScheme(state) {
       const value = state.settings?.color_scheme;
       return value && isSiteColorScheme(value) ? value : DEFAULT_SITE_COLOR_SCHEME;
+    },
+    defaultLanguage(state) {
+      return state.settings?.default_language === "de" ? "de" : "en";
     },
   },
   actions: {

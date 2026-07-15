@@ -13,6 +13,7 @@ pub struct UpdateSiteSettingsRequest {
     pub brand_name: String,
     pub browser_title: String,
     pub color_scheme: String,
+    pub default_language: String,
 }
 
 fn is_valid_color_scheme(value: &str) -> bool {
@@ -65,11 +66,16 @@ pub async fn update(
         return Err(ApiError::bad_request("unknown color scheme"));
     }
 
+    if !matches!(payload.default_language.as_str(), "de" | "en") {
+        return Err(ApiError::bad_request("language must be de or en"));
+    }
+
     let settings = site_settings::upsert(
         &state.pool,
         payload.brand_name.trim(),
         payload.browser_title.trim(),
         payload.color_scheme.trim(),
+        &payload.default_language,
     )
     .await
     .map_err(|err| ApiError::bad_request(err.to_string()))?;

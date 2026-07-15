@@ -165,14 +165,14 @@ function submitReply(submissionId: string, parentCommentId: string) {
 <template>
   <section class="submissions-panel">
     <div class="submissions-header">
-      <h3>Published Versions</h3>
-      <p>The system decides the global main version. You can override only your own reading base.</p>
+      <h3>{{ $t("Published Versions") }}</h3>
+      <p>{{ $t("The system decides the global main version. You can override only your own reading base.") }}</p>
     </div>
 
     <div v-if="mainSubmission" class="submission-group">
       <div class="group-heading">
-        <h4>Main Version</h4>
-        <p>System-selected default reading version.</p>
+        <h4>{{ $t("Main Version") }}</h4>
+        <p>{{ $t("System-selected default reading version.") }}</p>
       </div>
       <article
         class="submission-card main-card"
@@ -180,10 +180,10 @@ function submitReply(submissionId: string, parentCommentId: string) {
       >
         <div class="submission-meta">
           <div class="meta-stack">
-            <span class="badge main-badge">{{ roleLabel(mainSubmission.id) }}</span>
+            <span class="badge main-badge">{{ $t(roleLabel(mainSubmission.id)) }}</span>
             <strong>{{ authorLabel(mainSubmission) }}</strong>
           </div>
-          <time>{{ new Date(mainSubmission.published_at).toLocaleString() }}</time>
+          <time>{{ $date(mainSubmission.published_at) }}</time>
         </div>
         <pre>{{ mainSubmission.markdown_content }}</pre>
         <div class="comment-thread">
@@ -192,23 +192,23 @@ function submitReply(submissionId: string, parentCommentId: string) {
               <div class="comment-meta">
                 <strong>{{ commentAuthorLabel(comment) }}</strong>
                 <div class="comment-meta-right">
-                  <span v-if="comment.is_primary" class="badge primary-badge">primary comment</span>
-                  <time>{{ new Date(comment.created_at).toLocaleString() }}</time>
+                  <span v-if="comment.is_primary" class="badge primary-badge">{{ $t("primary comment") }}</span>
+                  <time>{{ $date(comment.created_at) }}</time>
                 </div>
               </div>
               <pre>{{ comment.markdown_content }}</pre>
               <button v-if="canComment" class="reply-toggle" @click="replyTargets[comment.id] = !replyTargets[comment.id]">
-                {{ replyTargets[comment.id] ? "Cancel reply" : "Reply" }}
+                {{ replyTargets[comment.id] ? $t("Cancel reply") : $t("Reply") }}
               </button>
               <div v-if="replyTargets[comment.id] && canComment" class="comment-form nested">
-                <textarea v-model="replyDrafts[comment.id]" placeholder="Write a reply." />
-                <button class="submission-action" @click="submitReply(mainSubmission.id, comment.id)">Post reply</button>
+                <textarea v-model="replyDrafts[comment.id]" :placeholder="$t('Write a reply.')" />
+                <button class="submission-action" @click="submitReply(mainSubmission.id, comment.id)">{{ $t("Post reply") }}</button>
               </div>
               <div v-if="comment.replies.length" class="reply-list">
                 <div v-for="reply in comment.replies" :key="reply.id" class="comment-card reply-card">
                   <div class="comment-meta">
                     <strong>{{ commentAuthorLabel(reply) }}</strong>
-                    <time>{{ new Date(reply.created_at).toLocaleString() }}</time>
+                    <time>{{ $date(reply.created_at) }}</time>
                   </div>
                   <pre>{{ reply.markdown_content }}</pre>
                 </div>
@@ -217,25 +217,25 @@ function submitReply(submissionId: string, parentCommentId: string) {
           </template>
         </div>
         <div v-if="canAddPrimaryComment(mainSubmission)" class="comment-form">
-          <h5>Add primary comment</h5>
-          <textarea v-model="rootDrafts[`${mainSubmission.id}:primary`]" placeholder="Optional author note for this version." />
-          <button class="submission-action" @click="submitRootComment(mainSubmission.id, true)">Post primary comment</button>
+          <h5>{{ $t("Add primary comment") }}</h5>
+          <textarea v-model="rootDrafts[`${mainSubmission.id}:primary`]" :placeholder="$t('Optional author note for this version.')" />
+          <button class="submission-action" @click="submitRootComment(mainSubmission.id, true)">{{ $t("Post primary comment") }}</button>
         </div>
         <div v-if="canComment" class="comment-form">
-          <h5>Add comment</h5>
-          <textarea v-model="rootDrafts[`${mainSubmission.id}:root`]" placeholder="Write a comment on this contribution." />
-          <button class="submission-action" @click="submitRootComment(mainSubmission.id)">Post comment</button>
+          <h5>{{ $t("Add comment") }}</h5>
+          <textarea v-model="rootDrafts[`${mainSubmission.id}:root`]" :placeholder="$t('Write a comment on this contribution.')" />
+          <button class="submission-action" @click="submitRootComment(mainSubmission.id)">{{ $t("Post comment") }}</button>
         </div>
         <button class="submission-action" @click="emit('setBase', mainSubmission.id)">
-          {{ isPersonalBase(mainSubmission.id) ? "Using as personal base" : "Use as personal base" }}
+          {{ isPersonalBase(mainSubmission.id) ? $t("Using as personal base") : $t("Use as personal base") }}
         </button>
       </article>
     </div>
 
     <div v-if="principalAlternatives.length" class="submission-group">
       <div class="group-heading">
-        <h4>Principal Alternatives</h4>
-        <p>Competing versions that are closest to being shown alongside the main version.</p>
+        <h4>{{ $t("Principal Alternatives") }}</h4>
+        <p>{{ $t("Competing versions that are closest to being shown alongside the main version.") }}</p>
       </div>
       <article
         v-for="submission in principalAlternatives"
@@ -245,10 +245,10 @@ function submitReply(submissionId: string, parentCommentId: string) {
       >
         <div class="submission-meta">
           <div class="meta-stack">
-            <span class="badge">{{ roleLabel(submission.id) }}</span>
+            <span class="badge">{{ $t(roleLabel(submission.id)) }}</span>
             <strong>{{ authorLabel(submission) }}</strong>
           </div>
-          <time>{{ new Date(submission.published_at).toLocaleString() }}</time>
+          <time>{{ $date(submission.published_at) }}</time>
         </div>
         <pre>{{ submission.markdown_content }}</pre>
         <div class="comment-thread">
@@ -257,23 +257,23 @@ function submitReply(submissionId: string, parentCommentId: string) {
               <div class="comment-meta">
                 <strong>{{ commentAuthorLabel(comment) }}</strong>
                 <div class="comment-meta-right">
-                  <span v-if="comment.is_primary" class="badge primary-badge">primary comment</span>
-                  <time>{{ new Date(comment.created_at).toLocaleString() }}</time>
+                  <span v-if="comment.is_primary" class="badge primary-badge">{{ $t("primary comment") }}</span>
+                  <time>{{ $date(comment.created_at) }}</time>
                 </div>
               </div>
               <pre>{{ comment.markdown_content }}</pre>
               <button v-if="canComment" class="reply-toggle" @click="replyTargets[comment.id] = !replyTargets[comment.id]">
-                {{ replyTargets[comment.id] ? "Cancel reply" : "Reply" }}
+                {{ replyTargets[comment.id] ? $t("Cancel reply") : $t("Reply") }}
               </button>
               <div v-if="replyTargets[comment.id] && canComment" class="comment-form nested">
-                <textarea v-model="replyDrafts[comment.id]" placeholder="Write a reply." />
-                <button class="submission-action" @click="submitReply(submission.id, comment.id)">Post reply</button>
+                <textarea v-model="replyDrafts[comment.id]" :placeholder="$t('Write a reply.')" />
+                <button class="submission-action" @click="submitReply(submission.id, comment.id)">{{ $t("Post reply") }}</button>
               </div>
               <div v-if="comment.replies.length" class="reply-list">
                 <div v-for="reply in comment.replies" :key="reply.id" class="comment-card reply-card">
                   <div class="comment-meta">
                     <strong>{{ commentAuthorLabel(reply) }}</strong>
-                    <time>{{ new Date(reply.created_at).toLocaleString() }}</time>
+                    <time>{{ $date(reply.created_at) }}</time>
                   </div>
                   <pre>{{ reply.markdown_content }}</pre>
                 </div>
@@ -282,25 +282,25 @@ function submitReply(submissionId: string, parentCommentId: string) {
           </template>
         </div>
         <div v-if="canAddPrimaryComment(submission)" class="comment-form">
-          <h5>Add primary comment</h5>
-          <textarea v-model="rootDrafts[`${submission.id}:primary`]" placeholder="Optional author note for this version." />
-          <button class="submission-action" @click="submitRootComment(submission.id, true)">Post primary comment</button>
+          <h5>{{ $t("Add primary comment") }}</h5>
+          <textarea v-model="rootDrafts[`${submission.id}:primary`]" :placeholder="$t('Optional author note for this version.')" />
+          <button class="submission-action" @click="submitRootComment(submission.id, true)">{{ $t("Post primary comment") }}</button>
         </div>
         <div v-if="canComment" class="comment-form">
-          <h5>Add comment</h5>
-          <textarea v-model="rootDrafts[`${submission.id}:root`]" placeholder="Write a comment on this contribution." />
-          <button class="submission-action" @click="submitRootComment(submission.id)">Post comment</button>
+          <h5>{{ $t("Add comment") }}</h5>
+          <textarea v-model="rootDrafts[`${submission.id}:root`]" :placeholder="$t('Write a comment on this contribution.')" />
+          <button class="submission-action" @click="submitRootComment(submission.id)">{{ $t("Post comment") }}</button>
         </div>
         <button class="submission-action" @click="emit('setBase', submission.id)">
-          {{ isPersonalBase(submission.id) ? "Using as personal base" : "Use as personal base" }}
+          {{ isPersonalBase(submission.id) ? $t("Using as personal base") : $t("Use as personal base") }}
         </button>
       </article>
     </div>
 
     <div v-if="otherSubmissions.length" class="submission-group">
       <div class="group-heading">
-        <h4>Other Visible Versions</h4>
-        <p>Published alternatives that are currently outside the principal set.</p>
+        <h4>{{ $t("Other Visible Versions") }}</h4>
+        <p>{{ $t("Published alternatives that are currently outside the principal set.") }}</p>
       </div>
       <article
         v-for="submission in otherSubmissions"
@@ -310,10 +310,10 @@ function submitReply(submissionId: string, parentCommentId: string) {
       >
         <div class="submission-meta">
           <div class="meta-stack">
-            <span class="badge">{{ roleLabel(submission.id) }}</span>
+            <span class="badge">{{ $t(roleLabel(submission.id)) }}</span>
             <strong>{{ authorLabel(submission) }}</strong>
           </div>
-          <time>{{ new Date(submission.published_at).toLocaleString() }}</time>
+          <time>{{ $date(submission.published_at) }}</time>
         </div>
         <pre>{{ submission.markdown_content }}</pre>
         <div class="comment-thread">
@@ -322,23 +322,23 @@ function submitReply(submissionId: string, parentCommentId: string) {
               <div class="comment-meta">
                 <strong>{{ commentAuthorLabel(comment) }}</strong>
                 <div class="comment-meta-right">
-                  <span v-if="comment.is_primary" class="badge primary-badge">primary comment</span>
-                  <time>{{ new Date(comment.created_at).toLocaleString() }}</time>
+                  <span v-if="comment.is_primary" class="badge primary-badge">{{ $t("primary comment") }}</span>
+                  <time>{{ $date(comment.created_at) }}</time>
                 </div>
               </div>
               <pre>{{ comment.markdown_content }}</pre>
               <button v-if="canComment" class="reply-toggle" @click="replyTargets[comment.id] = !replyTargets[comment.id]">
-                {{ replyTargets[comment.id] ? "Cancel reply" : "Reply" }}
+                {{ replyTargets[comment.id] ? $t("Cancel reply") : $t("Reply") }}
               </button>
               <div v-if="replyTargets[comment.id] && canComment" class="comment-form nested">
-                <textarea v-model="replyDrafts[comment.id]" placeholder="Write a reply." />
-                <button class="submission-action" @click="submitReply(submission.id, comment.id)">Post reply</button>
+                <textarea v-model="replyDrafts[comment.id]" :placeholder="$t('Write a reply.')" />
+                <button class="submission-action" @click="submitReply(submission.id, comment.id)">{{ $t("Post reply") }}</button>
               </div>
               <div v-if="comment.replies.length" class="reply-list">
                 <div v-for="reply in comment.replies" :key="reply.id" class="comment-card reply-card">
                   <div class="comment-meta">
                     <strong>{{ commentAuthorLabel(reply) }}</strong>
-                    <time>{{ new Date(reply.created_at).toLocaleString() }}</time>
+                    <time>{{ $date(reply.created_at) }}</time>
                   </div>
                   <pre>{{ reply.markdown_content }}</pre>
                 </div>
@@ -347,17 +347,17 @@ function submitReply(submissionId: string, parentCommentId: string) {
           </template>
         </div>
         <div v-if="canAddPrimaryComment(submission)" class="comment-form">
-          <h5>Add primary comment</h5>
-          <textarea v-model="rootDrafts[`${submission.id}:primary`]" placeholder="Optional author note for this version." />
-          <button class="submission-action" @click="submitRootComment(submission.id, true)">Post primary comment</button>
+          <h5>{{ $t("Add primary comment") }}</h5>
+          <textarea v-model="rootDrafts[`${submission.id}:primary`]" :placeholder="$t('Optional author note for this version.')" />
+          <button class="submission-action" @click="submitRootComment(submission.id, true)">{{ $t("Post primary comment") }}</button>
         </div>
         <div v-if="canComment" class="comment-form">
-          <h5>Add comment</h5>
-          <textarea v-model="rootDrafts[`${submission.id}:root`]" placeholder="Write a comment on this contribution." />
-          <button class="submission-action" @click="submitRootComment(submission.id)">Post comment</button>
+          <h5>{{ $t("Add comment") }}</h5>
+          <textarea v-model="rootDrafts[`${submission.id}:root`]" :placeholder="$t('Write a comment on this contribution.')" />
+          <button class="submission-action" @click="submitRootComment(submission.id)">{{ $t("Post comment") }}</button>
         </div>
         <button class="submission-action" @click="emit('setBase', submission.id)">
-          {{ isPersonalBase(submission.id) ? "Using as personal base" : "Use as personal base" }}
+          {{ isPersonalBase(submission.id) ? $t("Using as personal base") : $t("Use as personal base") }}
         </button>
       </article>
     </div>

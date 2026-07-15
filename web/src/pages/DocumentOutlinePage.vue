@@ -301,12 +301,12 @@ onMounted(async () => {
 
 <template>
   <main class="document-page">
-    <p v-if="isLoadingDocument">Loading document...</p>
-    <p v-else-if="error && !documentData" class="error">{{ error }}</p>
+    <p v-if="isLoadingDocument">{{ $t("Loading document...") }}</p>
+    <p v-else-if="error && !documentData" class="error">{{ $t(error) }}</p>
     <template v-else-if="documentData">
       <section class="document-header">
         <div>
-          <p class="eyebrow">{{ documentData.document.visibility }}</p>
+          <p class="eyebrow">{{ $t(documentData.document.visibility) }}</p>
           <h1>{{ documentData.document.title }}</h1>
         </div>
         <div class="document-header-meta">
@@ -330,24 +330,24 @@ onMounted(async () => {
         <div class="document-main">
           <form class="section-admin-form" @submit.prevent="handleCreateSection">
             <div>
-              <p class="eyebrow">Outline Edit</p>
-              <h2>Create Child Section</h2>
+              <p class="eyebrow">{{ $t("Outline Edit") }}</p>
+              <h2>{{ $t("Create Child Section") }}</h2>
               <p class="section-copy">
-                New sections are attached below the currently selected section. Select nothing to create a root section.
+                {{ $t("New sections are attached below the currently selected section. Select nothing to create a root section.") }}
               </p>
             </div>
             <div class="section-create-controls">
               <input
                 v-model="createSectionTitle"
                 :disabled="!createSectionHasHeading"
-                :placeholder="createSectionHasHeading ? 'New subsection title' : 'This section will have no heading'"
+                :placeholder="createSectionHasHeading ? $t('New subsection title') : $t('This section will have no heading')"
               />
               <label class="toggle-inline">
                 <input v-model="createSectionHasHeading" type="checkbox" />
-                <span>Has heading</span>
+                <span>{{ $t("Has heading") }}</span>
               </label>
               <button :disabled="createSectionState === 'creating' || (createSectionHasHeading && !createSectionTitle.trim())">
-                {{ createSectionState === "creating" ? "Creating..." : "Add section" }}
+                {{ createSectionState === "creating" ? $t("Creating...") : $t("Add section") }}
               </button>
             </div>
             <div class="section-create-controls secondary">
@@ -358,10 +358,10 @@ onMounted(async () => {
                 :disabled="createSectionState === 'creating' || createUnnamedSectionCount < 1"
                 @click="handleCreateUnnamedSections"
               >
-                {{ createSectionState === "creating" ? "Creating..." : "Add unnamed subsections" }}
+                {{ createSectionState === "creating" ? $t("Creating...") : $t("Add unnamed subsections") }}
               </button>
             </div>
-            <p v-if="createSectionError" class="error">{{ createSectionError }}</p>
+            <p v-if="createSectionError" class="error">{{ $t(createSectionError) }}</p>
           </form>
 
           <form
@@ -370,65 +370,65 @@ onMounted(async () => {
             @submit.prevent="handleUpdateSection"
           >
             <div>
-              <p class="eyebrow">Selected Section</p>
-              <h2>Edit Outline Placement</h2>
+              <p class="eyebrow">{{ $t("Selected Section") }}</p>
+              <h2>{{ $t("Edit Outline Placement") }}</h2>
               <p class="section-copy">
-                This view changes only hierarchy, order, and headings. Section text is edited separately.
+                {{ $t("This view changes only hierarchy, order, and headings. Section text is edited separately.") }}
               </p>
             </div>
             <div class="section-move-actions">
               <button type="button" :disabled="updateSectionState === 'saving' || !canMoveUp" @click="handleMoveUp">
-                Move up
+                {{ $t("Move up") }}
               </button>
               <button
                 type="button"
                 :disabled="updateSectionState === 'saving' || !canMoveDown"
                 @click="handleMoveDown"
               >
-                Move down
+                {{ $t("Move down") }}
               </button>
               <button
                 type="button"
                 :disabled="updateSectionState === 'saving' || !canPromote"
                 @click="handlePromote"
               >
-                Promote
+                {{ $t("Promote") }}
               </button>
               <button
                 type="button"
                 :disabled="updateSectionState === 'saving' || !canDemote"
                 @click="handleDemote"
               >
-                Demote
+                {{ $t("Demote") }}
               </button>
             </div>
             <div class="section-edit-grid">
               <label>
-                Title
+                {{ $t("Title") }}
                 <input
                   v-model="editSectionTitle"
                   :disabled="!editSectionHasHeading"
-                  :placeholder="editSectionHasHeading ? 'Section title' : 'This section has no heading'"
+                  :placeholder="editSectionHasHeading ? $t('Section title') : $t('This section has no heading')"
                 />
               </label>
               <div class="checkbox-row">
-                <span>Heading</span>
+                <span>{{ $t("Heading") }}</span>
                 <label class="checkbox-inline">
                   <input v-model="editSectionHasHeading" type="checkbox" />
-                  <span>This section has a heading</span>
+                  <span>{{ $t("This section has a heading") }}</span>
                 </label>
               </div>
               <div class="checkbox-row">
-                <span>Content</span>
+                <span>{{ $t("Content") }}</span>
                 <label class="checkbox-inline">
                   <input v-model="editSectionHasOwnText" type="checkbox" />
-                  <span>This section has its own text</span>
+                  <span>{{ $t("This section has its own text") }}</span>
                 </label>
               </div>
               <label>
-                Parent
+                {{ $t("Parent") }}
                 <select v-model="editSectionParentId">
-                  <option value="root">root</option>
+                  <option value="root">{{ $t("root") }}</option>
                   <option
                     v-for="section in eligibleParentSections"
                     :key="section.id"
@@ -439,17 +439,17 @@ onMounted(async () => {
                 </select>
               </label>
               <label>
-                Position
+                {{ $t("Position") }}
                 <input v-model.number="editSectionPosition" type="number" min="0" />
               </label>
               <button class="action-button" :disabled="updateSectionState === 'saving' || !editSectionTitle.trim()">
-                {{ updateSectionState === "saving" ? "Saving..." : "Save section" }}
+                {{ updateSectionState === "saving" ? $t("Saving...") : $t("Save section") }}
               </button>
             </div>
-            <p v-if="updateSectionError" class="error">{{ updateSectionError }}</p>
+            <p v-if="updateSectionError" class="error">{{ $t(updateSectionError) }}</p>
           </form>
 
-          <p v-else class="empty-note">Select a section to edit the outline.</p>
+          <p v-else class="empty-note">{{ $t("Select a section to edit the outline.") }}</p>
         </div>
       </section>
     </template>

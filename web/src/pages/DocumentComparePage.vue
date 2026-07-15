@@ -15,6 +15,7 @@ import SectionTree from "../components/SectionTree.vue";
 import { buildInlineDiff } from "../inline-diff";
 import { buildSectionNumbers } from "../section-numbering";
 import { useAuthStore } from "../stores/auth";
+import { formatDate, t } from "../i18n";
 
 type SectionCompareItem = {
   section: SectionRecord;
@@ -130,7 +131,7 @@ const readerPages = computed<ReaderPage[]>(() => {
     return [
       {
         id: "all",
-        title: documentData.value?.document.title ?? "Document",
+        title: documentData.value?.document.title ?? t("Document"),
         sectionIds: items.map((item) => item.section.id),
         sections: items,
       },
@@ -151,7 +152,7 @@ const readerPages = computed<ReaderPage[]>(() => {
         id: item.section.id,
         title: item.section.has_heading
           ? `${item.number} ${item.section.title}`.trim()
-          : item.number || "Untitled page",
+          : item.number || t("Untitled page"),
         sectionIds: [...pendingPrefix.map((entry) => entry.section.id), item.section.id],
         sections: [...pendingPrefix, item],
       };
@@ -176,7 +177,7 @@ const readerPages = computed<ReaderPage[]>(() => {
     return [
       {
         id: "all",
-        title: documentData.value?.document.title ?? "Document",
+        title: documentData.value?.document.title ?? t("Document"),
         sectionIds: items.map((item) => item.section.id),
         sections: items,
       },
@@ -190,7 +191,7 @@ const currentPage = computed(() => readerPages.value[currentPageIndex.value] ?? 
 const visibleCompareSections = computed(() => currentPage.value?.sections ?? compareSections.value);
 
 function submissionLabel(submission: SubmissionSummaryDto) {
-  return `${submission.display_name} @${submission.username} • ${new Date(submission.published_at).toLocaleString()}`;
+  return `${submission.display_name} @${submission.username} • ${formatDate(submission.published_at)}`;
 }
 
 function supportLabel(score: number | null) {
@@ -615,12 +616,12 @@ watch(readerPages, (pages) => {
 
 <template>
   <main class="document-page">
-    <p v-if="isLoadingDocument">Loading document...</p>
-    <p v-else-if="error && !documentData" class="error">{{ error }}</p>
+    <p v-if="isLoadingDocument">{{ $t("Loading document...") }}</p>
+    <p v-else-if="error && !documentData" class="error">{{ $t(error) }}</p>
     <template v-else-if="documentData">
       <section class="document-header">
         <div>
-          <p class="eyebrow">{{ documentData.document.visibility }}</p>
+          <p class="eyebrow">{{ $t(documentData.document.visibility) }}</p>
           <h1>{{ documentData.document.title }}</h1>
         </div>
         <div class="document-header-meta">
@@ -642,11 +643,11 @@ watch(readerPages, (pages) => {
         />
 
         <section class="compare-panel">
-          <p v-if="isLoadingCompares">Loading document text...</p>
+          <p v-if="isLoadingCompares">{{ $t("Loading document text...") }}</p>
           <div v-else class="compare-sections">
             <nav v-if="readerPages.length > 1" class="page-nav">
               <button type="button" :disabled="currentPageIndex === 0" @click="setCurrentPage(currentPageIndex - 1)">
-                Previous page
+                {{ $t("Previous page") }}
               </button>
               <div class="page-pills">
                 <button
@@ -665,7 +666,7 @@ watch(readerPages, (pages) => {
                 :disabled="currentPageIndex >= readerPages.length - 1"
                 @click="setCurrentPage(currentPageIndex + 1)"
               >
-                Next page
+                {{ $t("Next page") }}
               </button>
             </nav>
             <article
@@ -686,12 +687,12 @@ watch(readerPages, (pages) => {
                       {{ submissionLabel(item.compare.main_submission) }}
                     </span>
                     <span v-if="item.compare?.alternatives.length" class="reader-badge">
-                      {{ item.compare.alternatives.length }} alternative{{ item.compare.alternatives.length === 1 ? "" : "s" }}
+                      {{ item.compare.alternatives.length }} {{ $t(item.compare.alternatives.length === 1 ? "alternative" : "alternatives") }}
                     </span>
                   </div>
                 </div>
                 <RouterLink class="edit-link" :to="`/sections/${item.section.id}/edit`">
-                  Edit this section
+                  {{ $t("Edit this section") }}
                 </RouterLink>
               </header>
 
@@ -736,14 +737,14 @@ watch(readerPages, (pages) => {
 
                         <aside class="variant-popover">
                           <header class="popover-header">
-                            <span class="block-kind">{{ blockLabel(block) }}</span>
+                            <span class="block-kind">{{ $t(blockLabel(block)) }}</span>
                             <strong>
-                              {{ segment.highlight.variants.length }} variant{{ segment.highlight.variants.length === 1 ? "" : "s" }}
+                              {{ segment.highlight.variants.length }} {{ $t(segment.highlight.variants.length === 1 ? "variant" : "variants") }}
                             </strong>
                             <button
                               class="popover-close"
                               type="button"
-                              aria-label="Close variants"
+                              :aria-label="$t('Close variants')"
                               @click="handleCloseVariantPanel"
                             >
                               x
@@ -759,7 +760,7 @@ watch(readerPages, (pages) => {
                               <strong class="variant-meta">
                                 <span class="rank-marker">{{ entry.submission?.rank ?? "?" }}</span>
                                 <span>
-                                  {{ entry.submission ? submissionLabel(entry.submission) : "Unknown alternative" }}
+                                  {{ entry.submission ? submissionLabel(entry.submission) : $t("Unknown alternative") }}
                                 </span>
                               </strong>
                               <span v-if="entry.submission?.support_percent !== null" class="support-pill">
@@ -792,7 +793,7 @@ watch(readerPages, (pages) => {
                 >
                   {{ item.number }}
                 </span>
-                No published version yet.
+                {{ $t("No published version yet.") }}
               </p>
             </article>
           </div>

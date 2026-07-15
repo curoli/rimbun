@@ -65,12 +65,12 @@ onMounted(() => {
     <section class="documents-panel">
       <div class="panel-heading">
         <h1>
-          Documents<span v-if="!isLoading && !error"> ({{ documents.length }})</span>
+          {{ $t("Documents") }}<span v-if="!isLoading && !error"> ({{ documents.length }})</span>
         </h1>
       </div>
 
-      <p v-if="isLoading">Loading documents...</p>
-      <p v-else-if="error" class="error">{{ error }}</p>
+      <p v-if="isLoading">{{ $t("Loading documents...") }}</p>
+      <p v-else-if="error" class="error">{{ $t(error) }}</p>
       <div v-else class="documents-grid">
         <RouterLink
           v-for="document in documents"
@@ -78,7 +78,7 @@ onMounted(() => {
           class="document-card"
           :to="`/documents/${document.slug}`"
         >
-          <span class="visibility">{{ document.visibility }}</span>
+          <span class="visibility">{{ $t(document.visibility) }}</span>
           <h2>{{ document.title }}</h2>
           <p>{{ document.slug }}</p>
         </RouterLink>
@@ -88,45 +88,43 @@ onMounted(() => {
     <form v-if="canManageDocuments" class="create-form" @submit.prevent="handleCreateDocument">
       <div class="form-header">
         <div>
-          <h2>Create New Document</h2>
-          <p>Admins can create the document shell before sections and content are added.</p>
+          <h2>{{ $t("Create New Document") }}</h2>
+          <p>{{ $t("Admins can create the document shell before sections and content are added.") }}</p>
         </div>
         <button class="create-button" :disabled="createState === 'creating'">
-          {{ createState === "creating" ? "Creating..." : "Create document" }}
+          {{ createState === "creating" ? $t("Creating...") : $t("Create document") }}
         </button>
       </div>
       <div class="form-grid">
         <label>
-          Title
+          {{ $t("Title") }}
           <input v-model="createForm.title" placeholder="Bandung Weather Notes" />
         </label>
         <label>
-          Slug
+          {{ $t("Slug") }}
           <input v-model="createForm.slug" placeholder="bandung-weather-notes" />
         </label>
         <label>
-          Visibility
+          {{ $t("Visibility") }}
           <select v-model="createForm.visibility">
-            <option value="authenticated">authenticated</option>
-            <option value="public">public</option>
+            <option value="authenticated">{{ $t("authenticated") }}</option>
+            <option value="public">{{ $t("public") }}</option>
           </select>
         </label>
       </div>
     </form>
 
     <details class="about-note">
-      <summary>What is Rimbun?</summary>
+      <summary>{{ $t("What is Rimbun?") }}</summary>
       <div class="about-copy">
         <p>
-          Rimbun is a collaborative writing system for structured texts where competing published variants stay
-          visible instead of disappearing into revision history.
+          {{ $t("Rimbun is a collaborative writing system for structured texts where competing published variants stay visible instead of disappearing into revision history.") }}
         </p>
         <p>
-          It lets readers browse a document through its current main text while still seeing where alternatives
-          exist and how they differ.
+          {{ $t("It lets readers browse a document through its current main text while still seeing where alternatives exist and how they differ.") }}
         </p>
         <a class="repo-link" href="https://github.com/curoli/rimbun" target="_blank" rel="noreferrer">
-          View the GitHub repository
+          {{ $t("View the GitHub repository") }}
         </a>
       </div>
     </details>

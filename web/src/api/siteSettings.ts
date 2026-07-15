@@ -9,6 +9,7 @@ export function updateSiteSettings(payload: {
   brand_name: string;
   browser_title: string;
   color_scheme: string;
+  default_language: "de" | "en";
 }) {
   return apiRequest<SiteSettings>("/api/site-settings", {
     method: "PATCH",

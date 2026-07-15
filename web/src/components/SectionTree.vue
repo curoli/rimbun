@@ -92,7 +92,7 @@ function sectionLabel(section: SectionRecord) {
 <template>
   <aside class="tree-panel">
     <div class="tree-header">
-      <p>Sections</p>
+      <p>{{ $t("Sections") }}</p>
       <span>{{ sections.length }}</span>
     </div>
     <button

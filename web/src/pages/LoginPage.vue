@@ -44,52 +44,52 @@ watch(
     <section class="auth-panel">
       <div class="auth-copy">
         <p class="eyebrow">Rimbun MVP</p>
-        <h1>Semantic versioning for prose.</h1>
+        <h1>{{ $t("Semantic versioning for prose.") }}</h1>
         <p>
-          Sign in to browse documents, switch between alternatives, and publish a new section version.
+          {{ $t("Sign in to browse documents, switch between alternatives, and publish a new section version.") }}
         </p>
       </div>
 
       <div class="auth-form-panel">
         <div class="mode-toggle">
-          <button :class="{ active: mode === 'login' }" @click="mode = 'login'">Login</button>
-          <button :class="{ active: mode === 'register' }" @click="mode = 'register'">Register</button>
+          <button :class="{ active: mode === 'login' }" @click="mode = 'login'">{{ $t("Login") }}</button>
+          <button :class="{ active: mode === 'register' }" @click="mode = 'register'">{{ $t("Register") }}</button>
         </div>
 
         <form class="auth-form" @submit.prevent="submit">
           <template v-if="mode === 'login'">
             <label>
-              Identifier
-              <input v-model="loginForm.identifier" placeholder="username or email" />
+              {{ $t("Identifier") }}
+              <input v-model="loginForm.identifier" :placeholder="$t('username or email')" />
             </label>
             <label>
-              Password
-              <input v-model="loginForm.password" type="password" placeholder="password" />
+              {{ $t("Password") }}
+              <input v-model="loginForm.password" type="password" :placeholder="$t('password')" />
             </label>
           </template>
 
           <template v-else>
             <label>
-              Username
-              <input v-model="registerForm.username" placeholder="username" />
+              {{ $t("Username") }}
+              <input v-model="registerForm.username" :placeholder="$t('username')" />
             </label>
             <label>
-              Display name
-              <input v-model="registerForm.display_name" placeholder="display name" />
+              {{ $t("Display name") }}
+              <input v-model="registerForm.display_name" :placeholder="$t('display name')" />
             </label>
             <label>
-              Email
-              <input v-model="registerForm.email" type="email" placeholder="email" />
+              {{ $t("Email") }}
+              <input v-model="registerForm.email" type="email" :placeholder="$t('email')" />
             </label>
             <label>
-              Password
-              <input v-model="registerForm.password" type="password" placeholder="min. 8 characters" />
+              {{ $t("Password") }}
+              <input v-model="registerForm.password" type="password" :placeholder="$t('min. 8 characters')" />
             </label>
           </template>
 
-          <p v-if="auth.error" class="auth-error">{{ auth.error }}</p>
+          <p v-if="auth.error" class="auth-error">{{ $t(auth.error) }}</p>
           <button class="submit" :disabled="auth.isLoading">
-            {{ auth.isLoading ? "Working..." : mode === "login" ? "Login" : "Create account" }}
+            {{ auth.isLoading ? $t("Working...") : mode === "login" ? $t("Login") : $t("Create account") }}
           </button>
         </form>
       </div>

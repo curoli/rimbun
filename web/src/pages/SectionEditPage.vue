@@ -9,6 +9,7 @@ import SectionEditor from "../components/SectionEditor.vue";
 import SubmissionList from "../components/SubmissionList.vue";
 import { buildSectionNumbers } from "../section-numbering";
 import { useAuthStore } from "../stores/auth";
+import { formatDate, setDocumentLanguage, t } from "../i18n";
 
 const route = useRoute();
 const router = useRouter();
@@ -56,11 +57,11 @@ const personalBaseSubmission = computed(() => {
 });
 
 const sectionHeadingLabel = computed(() =>
-  selectedSection.value?.has_heading ? selectedSection.value.title : "No heading",
+  selectedSection.value?.has_heading ? selectedSection.value.title : t("No heading"),
 );
 
 function submissionLabel(submission: SectionViewResponse["active_submissions"][number]) {
-  return `${submission.display_name} @${submission.username} • ${new Date(submission.published_at).toLocaleString()}`;
+  return `${submission.display_name} @${submission.username} • ${formatDate(submission.published_at)}`;
 }
 
 function syncDraftFromView(view: SectionViewResponse | null) {
@@ -106,6 +107,7 @@ async function loadSectionView() {
     const view = await getSectionView(id);
     sectionView.value = view;
     documentData.value = await getDocument(view.section.document_id);
+    setDocumentLanguage(documentData.value.document.markdown_policy?.ui_language);
     syncDraftFromView(sectionView.value);
   } catch (loadError) {
     error.value = loadError instanceof Error ? loadError.message : "Failed to load section";
@@ -209,19 +211,19 @@ onMounted(async () => {
 
 <template>
   <main class="document-page">
-    <p v-if="isLoadingSection">Loading section...</p>
-    <p v-else-if="error && !sectionView" class="error">{{ error }}</p>
+    <p v-if="isLoadingSection">{{ $t("Loading section...") }}</p>
+    <p v-else-if="error && !sectionView" class="error">{{ $t(error) }}</p>
     <template v-else-if="selectedSection && sectionView">
       <section class="document-header">
         <div>
-          <p class="eyebrow">Section Edit</p>
+          <p class="eyebrow">{{ $t("Section Edit") }}</p>
           <h1>
             <span v-if="selectedSection.has_heading && sectionNumber" class="section-number">{{ sectionNumber }}</span>
             {{ sectionHeadingLabel }}
           </h1>
         </div>
         <div class="document-header-meta">
-          <p class="document-slug">Section workspace</p>
+          <p class="document-slug">{{ $t("Section workspace") }}</p>
           <DocumentViewNav
             :document-ref="documentData?.document.slug ?? selectedSection.document_id"
             :can-manage-outline="canManageOutline"
@@ -244,14 +246,14 @@ onMounted(async () => {
           :global-main-label="
             globalMainSubmission
               ? submissionLabel(globalMainSubmission)
-              : 'No global main version yet'
+              : $t('No global main version yet')
           "
           :personal-base-label="
             personalBaseSubmission
               ? submissionLabel(personalBaseSubmission)
               : auth.user
-                ? 'Not set yet'
-                : 'Login required'
+                ? $t('Not set yet')
+                : $t('Login required')
           "
           @update:content="draftContent = $event"
           @update:main-comment="draftMainComment = $event"
@@ -270,7 +272,7 @@ onMounted(async () => {
           @set-base="handleSetBase"
           @create-comment="handleCreateComment"
         />
-        <p v-else class="empty-note">This section has no own text. Only its subsections contribute content.</p>
+        <p v-else class="empty-note">{{ $t("This section has no own text. Only its subsections contribute content.") }}</p>
       </div>
     </template>
   </main>

@@ -11,6 +11,7 @@ export type SiteSettings = {
   brand_name: string;
   browser_title: string;
   color_scheme: string;
+  default_language: "de" | "en";
   updated_at: string;
 };
 

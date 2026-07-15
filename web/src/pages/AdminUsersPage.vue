@@ -88,26 +88,26 @@ onMounted(async () => {
   <main class="admin-users-page">
     <section class="admin-header">
       <div>
-        <p class="eyebrow">Admin</p>
-        <h1>Users</h1>
+        <p class="eyebrow">{{ $t("Admin") }}</p>
+        <h1>{{ $t("Users") }}</h1>
       </div>
       <p class="admin-copy">
-        Overview of all registered users and their current roles.
+        {{ $t("Overview of all registered users and their current roles.") }}
       </p>
     </section>
 
     <section class="admin-panel">
-      <p v-if="isLoading">Loading users...</p>
-      <p v-else-if="error" class="error">{{ error }}</p>
+      <p v-if="isLoading">{{ $t("Loading users...") }}</p>
+      <p v-else-if="error" class="error">{{ $t(error) }}</p>
       <table v-else class="users-table">
         <thead>
           <tr>
-            <th>Username</th>
-            <th>Display name</th>
-            <th>Email</th>
-            <th>Role</th>
-            <th>Created</th>
-            <th>Password reset</th>
+            <th>{{ $t("Username") }}</th>
+            <th>{{ $t("Display name") }}</th>
+            <th>{{ $t("Email") }}</th>
+            <th>{{ $t("Role") }}</th>
+            <th>{{ $t("Created") }}</th>
+            <th>{{ $t("Password reset") }}</th>
           </tr>
         </thead>
         <tbody>
@@ -116,23 +116,23 @@ onMounted(async () => {
             <td>{{ user.display_name }}</td>
             <td>{{ user.email }}</td>
             <td>{{ user.role }}</td>
-            <td>{{ new Date(user.created_at).toLocaleString() }}</td>
+            <td>{{ $date(user.created_at) }}</td>
             <td class="password-reset-cell">
               <div class="password-reset-controls">
                 <input
                   v-model="passwordDrafts[user.id]"
                   type="password"
-                  placeholder="New password"
+                  :placeholder="$t('New password')"
                 />
                 <button
                   type="button"
                   :disabled="resetStates[user.id] === 'saving' || !(passwordDrafts[user.id] ?? '').trim()"
                   @click="handleResetPassword(user.id)"
                 >
-                  {{ resetStates[user.id] === "saving" ? "Resetting..." : "Reset password" }}
+                  {{ resetStates[user.id] === "saving" ? $t("Resetting...") : $t("Reset password") }}
                 </button>
               </div>
-              <p v-if="resetMessages[user.id]" class="reset-message">{{ resetMessages[user.id] }}</p>
+              <p v-if="resetMessages[user.id]" class="reset-message">{{ $t(resetMessages[user.id]) }}</p>
             </td>
           </tr>
         </tbody>

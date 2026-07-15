@@ -1,9 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, onBeforeUnmount, ref } from "vue";
+import { computed, onMounted, onBeforeUnmount, ref, watch } from "vue";
 import { RouterLink, RouterView, useRoute, useRouter } from "vue-router";
 
 import { useAuthStore } from "./stores/auth";
 import { useSiteStore } from "./stores/site";
+import { getDocument } from "./api/documents";
+import LanguageSelector from "./components/LanguageSelector.vue";
+import { resetDocumentLanguage, setDocumentLanguage } from "./i18n";
 
 const auth = useAuthStore();
 const site = useSiteStore();
@@ -11,6 +14,7 @@ const route = useRoute();
 const router = useRouter();
 const accountMenuOpen = ref(false);
 const accountMenuRef = ref<HTMLElement | null>(null);
+let languageLoadSequence = 0;
 
 const isAuthPage = computed(() => route.path.startsWith("/login"));
 const canManageAccounts = computed(() =>
@@ -61,6 +65,26 @@ function handleDocumentClick(event: MouseEvent) {
   }
 }
 
+async function applyRouteLanguage() {
+  const sequence = ++languageLoadSequence;
+  resetDocumentLanguage();
+  const documentRef = route.params.documentRef;
+  if (typeof documentRef !== "string") {
+    return;
+  }
+
+  try {
+    const data = await getDocument(documentRef);
+    if (sequence === languageLoadSequence) {
+      setDocumentLanguage(data.document.markdown_policy?.ui_language);
+    }
+  } catch {
+    // The page itself presents access and loading errors.
+  }
+}
+
+watch(() => route.fullPath, () => void applyRouteLanguage(), { immediate: true });
+
 onMounted(() => {
   void auth.restoreSession();
   void site.load();
@@ -77,6 +101,7 @@ onBeforeUnmount(() => {
     <header v-if="!isAuthPage" class="topbar">
       <RouterLink class="brand" to="/">{{ site.brandName }}</RouterLink>
       <div class="topbar-meta">
+        <LanguageSelector />
         <div v-if="auth.user" ref="accountMenuRef" class="account-menu">
           <button class="account-trigger" type="button" @click.stop="toggleAccountMenu">
             <span class="identity">
@@ -94,8 +119,8 @@ onBeforeUnmount(() => {
             </div>
 
             <RouterLink class="menu-link" to="/profile" @click="closeAccountMenu">
-              Your profile
-              <small>View your account details and change display name or password.</small>
+              {{ $t("Your profile") }}
+              <small>{{ $t("View your account details and change display name or password.") }}</small>
             </RouterLink>
 
             <RouterLink
@@ -104,8 +129,8 @@ onBeforeUnmount(() => {
               to="/admin/site-settings"
               @click="closeAccountMenu"
             >
-              Site settings
-              <small>Change the site name and browser title.</small>
+              {{ $t("Site Settings") }}
+              <small>{{ $t("Change the site name and browser title.") }}</small>
             </RouterLink>
 
             <RouterLink
@@ -114,8 +139,8 @@ onBeforeUnmount(() => {
               to="/admin/users"
               @click="closeAccountMenu"
             >
-              User administration
-              <small>See all registered users.</small>
+              {{ $t("User administration") }}
+              <small>{{ $t("See all registered users.") }}</small>
             </RouterLink>
 
             <RouterLink
@@ -124,12 +149,12 @@ onBeforeUnmount(() => {
               to="/admin/variant-collections"
               @click="closeAccountMenu"
             >
-              Variant collections
-              <small>Manage reusable test variants and generate test documents.</small>
+              {{ $t("Variant Collections") }}
+              <small>{{ $t("Manage reusable test variants and generate test documents.") }}</small>
             </RouterLink>
 
             <div v-if="auth.availableAccounts.length" class="account-list">
-              <span class="account-list-label">Available accounts</span>
+              <span class="account-list-label">{{ $t("Available accounts") }}</span>
               <button
                 v-for="account in auth.availableAccounts"
                 :key="account.sessionToken"
@@ -141,14 +166,14 @@ onBeforeUnmount(() => {
                 {{ account.user.display_name }} @{{ account.user.username }}
                 <small>
                   {{ account.user.role }}
-                  <template v-if="account.sessionToken === auth.activeSessionToken"> • active</template>
+                  <template v-if="account.sessionToken === auth.activeSessionToken"> • {{ $t("active") }}</template>
                 </small>
               </button>
             </div>
 
             <button type="button" class="menu-item" @click="handleLoginAnotherUser">
-              Log in existing account
-              <small>Authenticate an already existing user and keep it available in this browser.</small>
+              {{ $t("Log in existing account") }}
+              <small>{{ $t("Authenticate an already existing user and keep it available in this browser.") }}</small>
             </button>
 
             <button
@@ -157,24 +182,32 @@ onBeforeUnmount(() => {
               class="menu-item"
               @click="handleAddAccount"
             >
-              Create new account
-              <small>Create another user account and keep it available in this browser.</small>
+              {{ $t("Create new account") }}
+              <small>{{ $t("Create another user account and keep it available in this browser.") }}</small>
             </button>
 
             <button type="button" class="menu-item danger" @click="handleLogout">
-              Logout current account
-              <small>End only the currently active account session.</small>
+              {{ $t("Logout current account") }}
+              <small>{{ $t("End only the currently active account session.") }}</small>
             </button>
           </div>
         </div>
-        <RouterLink v-else class="topbar-link" to="/login">Login</RouterLink>
+        <RouterLink v-else class="topbar-link" to="/login">{{ $t("Login") }}</RouterLink>
       </div>
     </header>
+    <div v-if="isAuthPage" class="auth-language"><LanguageSelector /></div>
     <RouterView />
   </div>
 </template>
 
 <style>
+.auth-language {
+  position: fixed;
+  top: 1rem;
+  right: 1rem;
+  z-index: 10;
+}
+
 :root {
   color-scheme: light;
   font-family: "IBM Plex Sans", "Segoe UI", sans-serif;

@@ -34,6 +34,20 @@ pub struct DocumentDetailResponse {
     pub sections: Vec<sections::SectionRecord>,
 }
 
+fn validate_markdown_policy(policy: &serde_json::Value) -> Result<(), ApiError> {
+    let Some(language) = policy.get("ui_language") else {
+        return Ok(());
+    };
+
+    if language.is_null() || matches!(language.as_str(), Some("de" | "en")) {
+        Ok(())
+    } else {
+        Err(ApiError::bad_request(
+            "document UI language must be de, en, or null",
+        ))
+    }
+}
+
 pub async fn resolve_document_ref(
     pool: &sqlx::PgPool,
     document_ref: &str,
@@ -82,6 +96,11 @@ pub async fn create(
         ));
     }
 
+    let markdown_policy = payload
+        .markdown_policy
+        .unwrap_or_else(|| serde_json::json!({}));
+    validate_markdown_policy(&markdown_policy)?;
+
     let document = documents::create(
         &state.pool,
         &documents::NewDocument {
@@ -89,9 +108,7 @@ pub async fn create(
             slug: payload.slug.trim().to_owned(),
             title: payload.title.trim().to_owned(),
             visibility: payload.visibility,
-            markdown_policy: payload
-                .markdown_policy
-                .unwrap_or_else(|| serde_json::json!({})),
+            markdown_policy,
             created_by: user.id,
         },
     )
@@ -148,19 +165,45 @@ pub async fn update(
         .await?
         .ok_or_else(|| ApiError::not_found("document not found"))?;
 
+    let markdown_policy = payload
+        .markdown_policy
+        .unwrap_or_else(|| serde_json::json!({}));
+    validate_markdown_policy(&markdown_policy)?;
+
     let document = documents::update(
         &state.pool,
         existing.id,
         payload.slug.trim(),
         payload.title.trim(),
         &payload.visibility,
-        &payload
-            .markdown_policy
-            .unwrap_or_else(|| serde_json::json!({})),
+        &markdown_policy,
     )
     .await
     .map_err(|err| ApiError::bad_request(err.to_string()))?
     .ok_or_else(|| ApiError::not_found("document not found"))?;
 
     Ok(Json(document))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_markdown_policy;
+
+    #[test]
+    fn document_ui_language_accepts_inheritance_and_supported_languages() {
+        for policy in [
+            serde_json::json!({}),
+            serde_json::json!({"ui_language": null}),
+            serde_json::json!({"ui_language": "de"}),
+            serde_json::json!({"ui_language": "en"}),
+        ] {
+            assert!(validate_markdown_policy(&policy).is_ok());
+        }
+    }
+
+    #[test]
+    fn document_ui_language_rejects_unknown_values() {
+        assert!(validate_markdown_policy(&serde_json::json!({"ui_language": "fr"})).is_err());
+        assert!(validate_markdown_policy(&serde_json::json!({"ui_language": 1})).is_err());
+    }
 }

@@ -24,37 +24,37 @@ const emit = defineEmits<{
   <section class="editor-panel">
     <div class="editor-header">
       <div>
-        <p class="eyebrow">Draft Editor</p>
+        <p class="eyebrow">{{ $t("Draft Editor") }}</p>
         <h2>{{ title }}</h2>
       </div>
       <div v-if="hasOwnText" class="editor-actions">
         <button class="ghost" :disabled="!canEdit || saveState === 'saving'" @click="emit('save')">
-          {{ saveState === "saving" ? "Saving..." : "Save Draft" }}
+          {{ saveState === "saving" ? $t("Saving...") : $t("Save Draft") }}
         </button>
         <button class="solid" :disabled="!canEdit || publishState === 'publishing'" @click="emit('publish')">
-          {{ publishState === "publishing" ? "Publishing..." : "Publish" }}
+          {{ publishState === "publishing" ? $t("Publishing...") : $t("Publish") }}
         </button>
       </div>
     </div>
     <div v-if="hasOwnText" class="editor-status-grid">
       <div class="status-card">
-        <span>Global Main Version</span>
+        <span>{{ $t("Global Main Version") }}</span>
         <strong>{{ globalMainLabel }}</strong>
       </div>
       <div class="status-card accent">
-        <span>Personal Reading Base</span>
+        <span>{{ $t("Personal Reading Base") }}</span>
         <strong>{{ personalBaseLabel }}</strong>
       </div>
     </div>
-    <p v-if="error" class="error">{{ error }}</p>
+    <p v-if="error" class="error">{{ $t(error) }}</p>
     <p v-if="!hasOwnText" class="structure-note">
-      This section is configured as structure-only. Its content comes only from its subsections.
+      {{ $t("This section is configured as structure-only. Its content comes only from its subsections.") }}
     </p>
     <textarea
       v-else
       :value="content"
       :disabled="!canEdit"
-      placeholder="Write the section content in Markdown."
+      :placeholder="$t('Write the section content in Markdown.')"
       @input="emit('update:content', ($event.target as HTMLTextAreaElement).value)"
     />
     <textarea
@@ -62,7 +62,7 @@ const emit = defineEmits<{
       class="comment-textarea"
       :value="mainComment"
       :disabled="!canEdit"
-      placeholder="Optional main comment for this contribution."
+      :placeholder="$t('Optional main comment for this contribution.')"
       @input="emit('update:mainComment', ($event.target as HTMLTextAreaElement).value)"
     />
   </section>

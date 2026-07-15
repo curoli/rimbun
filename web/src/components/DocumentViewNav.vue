@@ -13,30 +13,30 @@ const editTarget = computed(() => (props.sectionId ? `/sections/${props.sectionI
 </script>
 
 <template>
-  <nav class="view-nav" aria-label="Document views">
+  <nav class="view-nav" :aria-label="$t('Document views')">
     <RouterLink :class="{ active: activeView === 'reader' }" :to="`/documents/${documentRef}`">
-      Read
+      {{ $t("Read") }}
     </RouterLink>
     <RouterLink
       v-if="editTarget"
       :class="{ active: activeView === 'edit' }"
       :to="editTarget"
     >
-      Edit section
+      {{ $t("Edit section") }}
     </RouterLink>
     <RouterLink
       v-if="canManageOutline"
       :class="{ active: activeView === 'outline' }"
       :to="`/documents/${documentRef}/outline`"
     >
-      Outline
+      {{ $t("Outline") }}
     </RouterLink>
     <RouterLink
       v-if="canManageOutline"
       :class="{ active: activeView === 'settings' }"
       :to="`/documents/${documentRef}/settings`"
     >
-      Settings
+      {{ $t("Settings") }}
     </RouterLink>
   </nav>
 </template>

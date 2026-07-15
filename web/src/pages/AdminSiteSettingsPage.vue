@@ -17,10 +17,12 @@ const form = reactive<{
   brand_name: string;
   browser_title: string;
   color_scheme: string;
+  default_language: "de" | "en";
 }>({
   brand_name: "",
   browser_title: "",
   color_scheme: SITE_COLOR_SCHEMES[0].value,
+  default_language: "en",
 });
 
 const canManageSite = computed(() =>
@@ -31,6 +33,7 @@ function syncForm() {
   form.brand_name = site.brandName;
   form.browser_title = site.browserTitle;
   form.color_scheme = site.colorScheme;
+  form.default_language = site.defaultLanguage;
 }
 
 async function handleSave() {
@@ -41,6 +44,7 @@ async function handleSave() {
       brand_name: form.brand_name,
       browser_title: form.browser_title,
       color_scheme: form.color_scheme,
+      default_language: form.default_language,
     });
     site.apply(settings);
     syncForm();
@@ -66,39 +70,47 @@ onMounted(async () => {
   <main class="site-settings-page">
     <section class="admin-header">
       <div>
-        <p class="eyebrow">Admin</p>
-        <h1>Site Settings</h1>
+        <p class="eyebrow">{{ $t("Admin") }}</p>
+        <h1>{{ $t("Site Settings") }}</h1>
       </div>
       <p class="admin-copy">
-        Change the site brand shown in the header, the browser page title, and the active color scheme.
+        {{ $t("Change the site brand shown in the header, the browser page title, the active color scheme, and the default interface language.") }}
       </p>
     </section>
 
     <section class="settings-panel">
-      <p v-if="error" class="error">{{ error }}</p>
+      <p v-if="error" class="error">{{ $t(error) }}</p>
 
       <label>
-        <span>Header brand</span>
+        <span>{{ $t("Header brand") }}</span>
         <input v-model="form.brand_name" type="text" />
       </label>
 
       <label>
-        <span>Browser title</span>
+        <span>{{ $t("Browser title") }}</span>
         <input v-model="form.browser_title" type="text" />
       </label>
 
       <label>
-        <span>Color scheme</span>
+        <span>{{ $t("Color scheme") }}</span>
         <select v-model="form.color_scheme">
           <option v-for="scheme in SITE_COLOR_SCHEMES" :key="scheme.value" :value="scheme.value">
-            {{ scheme.label }}: {{ scheme.description }}
+            {{ $t(scheme.label) }}: {{ $t(scheme.description) }}
           </option>
+        </select>
+      </label>
+
+      <label>
+        <span>{{ $t("Default interface language") }}</span>
+        <select v-model="form.default_language">
+          <option value="de">{{ $t("German") }}</option>
+          <option value="en">{{ $t("English") }}</option>
         </select>
       </label>
 
       <div class="action-row">
         <button type="button" :disabled="saveState === 'saving'" @click="handleSave">
-          {{ saveState === "saving" ? "Saving..." : "Save settings" }}
+          {{ saveState === "saving" ? $t("Saving...") : $t("Save settings") }}
         </button>
       </div>
     </section>
