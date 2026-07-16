@@ -110,8 +110,16 @@ pub async fn build(config: Config) -> anyhow::Result<Router> {
             post(crate::handlers::moderation::update),
         )
         .route(
+            "/api/submissions/{id}",
+            axum::routing::delete(crate::handlers::submissions::delete),
+        )
+        .route(
             "/api/submissions/{id}/comments",
             get(crate::handlers::comments::list).post(crate::handlers::comments::create),
+        )
+        .route(
+            "/api/comments/{id}",
+            axum::routing::delete(crate::handlers::comments::delete),
         )
         .with_state(state);
 

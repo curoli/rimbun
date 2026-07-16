@@ -1,12 +1,12 @@
 use axum::{
     Json,
     extract::{Path, State},
-    http::HeaderMap,
+    http::{HeaderMap, StatusCode},
 };
 use serde::Deserialize;
 
 use crate::{
-    db::{comments, documents, sections, submissions},
+    db::{comments, documents, moderation, sections, submissions},
     error::ApiError,
     http::extractors::{maybe_current_user, require_current_user},
     state::AppState,
@@ -17,6 +17,19 @@ pub struct CreateCommentRequest {
     pub parent_comment_id: Option<uuid::Uuid>,
     pub markdown_content: String,
     pub is_primary: Option<bool>,
+}
+
+async fn require_visible_submission(
+    state: &AppState,
+    submission_id: uuid::Uuid,
+) -> Result<(), ApiError> {
+    let moderation = moderation::find_by_submission_id(&state.pool, submission_id)
+        .await
+        .map_err(|err| ApiError::internal(err.to_string()))?;
+    if moderation.is_some_and(|record| record.hidden || record.soft_deleted) {
+        return Err(ApiError::not_found("submission not found"));
+    }
+    Ok(())
 }
 
 pub async fn list(
@@ -30,6 +43,7 @@ pub async fn list(
         .await
         .map_err(|err| ApiError::internal(err.to_string()))?
         .ok_or_else(|| ApiError::not_found("submission not found"))?;
+    require_visible_submission(&state, submission_id).await?;
 
     let section = sections::find_by_id(&state.pool, submission.section_id)
         .await
@@ -63,6 +77,7 @@ pub async fn create(
         .await
         .map_err(|err| ApiError::internal(err.to_string()))?
         .ok_or_else(|| ApiError::not_found("submission not found"))?;
+    require_visible_submission(&state, submission_id).await?;
 
     let markdown_content = payload.markdown_content.trim();
     if markdown_content.is_empty() {
@@ -117,4 +132,28 @@ pub async fn create(
     .map_err(|err| ApiError::internal(err.to_string()))?;
 
     Ok(Json(comment))
+}
+
+pub async fn delete(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(comment_id): Path<uuid::Uuid>,
+) -> Result<StatusCode, ApiError> {
+    let user = require_current_user(State(state.clone()), &headers).await?;
+    let comment = comments::find_by_id(&state.pool, comment_id)
+        .await
+        .map_err(|err| ApiError::internal(err.to_string()))?
+        .ok_or_else(|| ApiError::not_found("comment not found"))?;
+
+    if comment.user_id != user.id && user.role != "admin" {
+        return Err(ApiError::forbidden(
+            "only the comment author or an admin can delete this comment",
+        ));
+    }
+
+    comments::soft_delete(&state.pool, comment_id, user.id)
+        .await
+        .map_err(|err| ApiError::internal(err.to_string()))?;
+
+    Ok(StatusCode::NO_CONTENT)
 }

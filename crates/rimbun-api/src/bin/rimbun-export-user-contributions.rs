@@ -263,6 +263,7 @@ async fn main() -> ExitCode {
             where c.submission_id = sub.id
               and c.user_id = sub.user_id
               and c.is_primary = true
+              and c.deleted_at is null
               and c.parent_comment_id is null
             limit 1
           ) as published_main_comment_markdown,

@@ -101,7 +101,10 @@ pub async fn list_by_section(
           s.superseded_by
         from submissions s
         join users u on u.id = s.user_id
-        where section_id = $1
+        left join submission_moderation sm on sm.submission_id = s.id
+        where s.section_id = $1
+          and coalesce(sm.soft_deleted, false) = false
+          and coalesce(sm.hidden, false) = false
         order by s.published_at desc
         "#,
     )

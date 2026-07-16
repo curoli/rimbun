@@ -7,10 +7,13 @@ import MarkdownContent from "./MarkdownContent.vue";
 const props = defineProps<{
   node: CommentTreeNode;
   canComment: boolean;
+  currentUserId: string | null;
+  isAdmin: boolean;
 }>();
 
 const emit = defineEmits<{
   reply: [payload: { parentCommentId: string; markdownContent: string }];
+  delete: [commentId: string];
 }>();
 
 const replyOpen = ref(false);
@@ -35,8 +38,17 @@ function submitReply() {
         {{ $t("Author's main comment") }}
       </span>
       <time>{{ $date(node.created_at) }}</time>
+      <button
+        v-if="!node.deleted_at && (isAdmin || currentUserId === node.user_id)"
+        type="button"
+        class="delete-button"
+        @click="emit('delete', node.id)"
+      >
+        {{ $t("Delete") }}
+      </button>
     </header>
-    <MarkdownContent class="comment-content" :source="node.markdown_content" />
+    <p v-if="node.deleted_at" class="deleted-comment">{{ $t("This comment was deleted.") }}</p>
+    <MarkdownContent v-else class="comment-content" :source="node.markdown_content" />
     <button
       v-if="canComment"
       type="button"
@@ -57,7 +69,10 @@ function submitReply() {
         :key="reply.id"
         :node="reply"
         :can-comment="canComment"
+        :current-user-id="currentUserId"
+        :is-admin="isAdmin"
         @reply="emit('reply', $event)"
+        @delete="emit('delete', $event)"
       />
     </div>
   </article>
@@ -100,6 +115,12 @@ time {
   margin: 0.55rem 0 0;
 }
 
+.deleted-comment {
+  margin: 0.55rem 0 0;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
 .reply-button {
   margin-top: 0.55rem;
   border: 0;
@@ -107,6 +128,17 @@ time {
   background: transparent;
   color: var(--accent);
   cursor: pointer;
+}
+
+.delete-button {
+  margin-left: auto;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--danger);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.78rem;
 }
 
 .reply-form {

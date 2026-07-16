@@ -2,13 +2,20 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 
-import { createSubmissionComment, getDocument, getSectionCompare } from "../api/documents";
+import {
+  createSubmissionComment,
+  deleteComment,
+  deleteSubmission,
+  getDocument,
+  getSectionCompare,
+} from "../api/documents";
 import type { DocumentDetailResponse, SectionCompareDto, SectionRecord } from "../api/types";
 import CommentDiscussion from "../components/CommentDiscussion.vue";
 import DocumentViewNav from "../components/DocumentViewNav.vue";
 import SectionTree from "../components/SectionTree.vue";
 import { buildSectionNumbers } from "../section-numbering";
 import { useAuthStore } from "../stores/auth";
+import { t } from "../i18n";
 
 const route = useRoute();
 const router = useRouter();
@@ -19,6 +26,7 @@ const sectionCompares = ref<Record<string, SectionCompareDto | null>>({});
 const selectedSectionId = ref<string | null>(null);
 const isLoading = ref(true);
 const isPosting = ref(false);
+const isDeleting = ref(false);
 const error = ref<string | null>(null);
 
 const canManageOutline = computed(() => auth.user?.role === "admin");
@@ -152,6 +160,49 @@ async function handleCreateComment(payload: {
   }
 }
 
+async function reloadSelectedCompare() {
+  const sectionId = selectedSectionId.value;
+  if (!sectionId) {
+    return;
+  }
+  sectionCompares.value = {
+    ...sectionCompares.value,
+    [sectionId]: await loadCompare(sectionId),
+  };
+}
+
+async function handleDeleteSubmission(submissionId: string) {
+  if (isDeleting.value || !window.confirm(t("Delete this contribution? Its comments will no longer be visible."))) {
+    return;
+  }
+  isDeleting.value = true;
+  error.value = null;
+  try {
+    await deleteSubmission(submissionId);
+    await reloadSelectedCompare();
+  } catch (deleteError) {
+    error.value = deleteError instanceof Error ? deleteError.message : "Failed to delete contribution";
+  } finally {
+    isDeleting.value = false;
+  }
+}
+
+async function handleDeleteComment(commentId: string) {
+  if (isDeleting.value || !window.confirm(t("Delete this comment? Replies will remain visible."))) {
+    return;
+  }
+  isDeleting.value = true;
+  error.value = null;
+  try {
+    await deleteComment(commentId);
+    await reloadSelectedCompare();
+  } catch (deleteError) {
+    error.value = deleteError instanceof Error ? deleteError.message : "Failed to delete comment";
+  } finally {
+    isDeleting.value = false;
+  }
+}
+
 watch(
   () => route.query.section,
   (sectionId) => {
@@ -220,8 +271,12 @@ onMounted(async () => {
             <CommentDiscussion
               v-if="selectedCompare"
               :compare="selectedCompare"
-              :can-comment="Boolean(auth.user) && !isPosting"
+              :can-comment="Boolean(auth.user) && !isPosting && !isDeleting"
+              :current-user-id="auth.user?.id ?? null"
+              :is-admin="auth.user?.role === 'admin'"
               @create-comment="handleCreateComment"
+              @delete-submission="handleDeleteSubmission"
+              @delete-comment="handleDeleteComment"
             />
             <p v-else-if="selectedSection.has_own_text" class="empty-note">
               {{ $t("No published version yet.") }}

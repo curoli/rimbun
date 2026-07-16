@@ -13,6 +13,8 @@ pub struct CommentRecord {
     pub markdown_content: String,
     pub is_primary: bool,
     pub created_at: DateTime<Utc>,
+    pub deleted_at: Option<DateTime<Utc>>,
+    pub deleted_by: Option<uuid::Uuid>,
 }
 
 #[derive(Debug, Clone)]
@@ -52,7 +54,9 @@ where
           (select display_name from users where id = user_id) as display_name,
           markdown_content,
           is_primary,
-          created_at
+          created_at,
+          deleted_at,
+          deleted_by
         "#,
     )
     .bind(comment.id)
@@ -91,9 +95,11 @@ pub async fn find_by_id(
           c.user_id,
           u.username,
           u.display_name,
-          c.markdown_content,
+          case when c.deleted_at is null then c.markdown_content else '' end as markdown_content,
           c.is_primary,
-          c.created_at
+          c.created_at,
+          c.deleted_at,
+          c.deleted_by
         from comments c
         join users u on u.id = c.user_id
         where c.id = $1
@@ -119,9 +125,11 @@ pub async fn list_by_submission(
           c.user_id,
           u.username,
           u.display_name,
-          c.markdown_content,
+          case when c.deleted_at is null then c.markdown_content else '' end as markdown_content,
           c.is_primary,
-          c.created_at
+          c.created_at,
+          c.deleted_at,
+          c.deleted_by
         from comments c
         join users u on u.id = c.user_id
         where c.submission_id = $1
@@ -152,9 +160,11 @@ pub async fn list_by_submission_ids(
           c.user_id,
           u.username,
           u.display_name,
-          c.markdown_content,
+          case when c.deleted_at is null then c.markdown_content else '' end as markdown_content,
           c.is_primary,
-          c.created_at
+          c.created_at,
+          c.deleted_at,
+          c.deleted_by
         from comments c
         join users u on u.id = c.user_id
         where c.submission_id = any($1)
@@ -182,15 +192,18 @@ pub async fn find_primary_for_submission_and_user(
           c.user_id,
           u.username,
           u.display_name,
-          c.markdown_content,
+          case when c.deleted_at is null then c.markdown_content else '' end as markdown_content,
           c.is_primary,
-          c.created_at
+          c.created_at,
+          c.deleted_at,
+          c.deleted_by
         from comments c
         join users u on u.id = c.user_id
         where c.submission_id = $1
           and c.user_id = $2
           and c.is_primary = true
           and c.parent_comment_id is null
+          and c.deleted_at is null
         "#,
     )
     .bind(submission_id)
@@ -199,4 +212,24 @@ pub async fn find_primary_for_submission_and_user(
     .await?;
 
     Ok(record)
+}
+
+pub async fn soft_delete(
+    pool: &PgPool,
+    comment_id: uuid::Uuid,
+    deleted_by: uuid::Uuid,
+) -> anyhow::Result<bool> {
+    let result = sqlx::query(
+        r#"
+        update comments
+        set markdown_content = '', deleted_at = now(), deleted_by = $2
+        where id = $1 and deleted_at is null
+        "#,
+    )
+    .bind(comment_id)
+    .bind(deleted_by)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected() > 0)
 }

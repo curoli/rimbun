@@ -17,10 +17,14 @@ async fn test_pool() -> Option<PgPool> {
 }
 
 async fn reset_schema(pool: &PgPool) {
-    sqlx::query("drop schema public cascade; create schema public;")
+    sqlx::query("drop schema public cascade")
         .execute(pool)
         .await
-        .expect("reset schema");
+        .expect("drop schema");
+    sqlx::query("create schema public")
+        .execute(pool)
+        .await
+        .expect("create schema");
     sqlx::migrate!("../../migrations")
         .run(pool)
         .await
@@ -1364,4 +1368,320 @@ async fn section_compare_returns_ranked_block_variants() {
             .iter()
             .any(|variant| variant["kind"] == "changed" || variant["kind"] == "unchanged")
     }));
+}
+
+#[tokio::test]
+async fn authors_and_admins_can_delete_submissions_and_comments() {
+    let Some(pool) = test_pool().await else {
+        eprintln!("Skipping integration test: TEST_DATABASE_URL not set or unreachable");
+        return;
+    };
+    reset_schema(&pool).await;
+
+    let (admin_id, admin_session) = seed_admin_user(&pool).await;
+    let (_author_id, author_session) = seed_user_with_role(&pool, "normal").await;
+    let (_other_id, other_session) = seed_user_with_role(&pool, "normal").await;
+    let (_document_id, section_id) = seed_single_section_document(&pool, admin_id).await;
+    let app = app::build(test_config(
+        std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL"),
+    ))
+    .await
+    .expect("build app");
+
+    let publish_request = Request::builder()
+        .method(Method::POST)
+        .uri(format!("/api/sections/{section_id}/publish"))
+        .header(header::COOKIE, format!("rimbun_session={author_session}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            json!({
+                "base_submission_id": null,
+                "markdown_content": "Contribution to delete",
+                "main_comment_markdown": "Author comment"
+            })
+            .to_string(),
+        ))
+        .expect("publish request");
+    let publish_response = app
+        .clone()
+        .oneshot(publish_request)
+        .await
+        .expect("publish response");
+    assert_eq!(publish_response.status(), StatusCode::OK);
+    let publish_body = to_bytes(publish_response.into_body(), usize::MAX)
+        .await
+        .expect("publish body");
+    let publish_json: serde_json::Value =
+        serde_json::from_slice(&publish_body).expect("publish json");
+    let submission_id = uuid::Uuid::parse_str(
+        publish_json["submission"]["id"]
+            .as_str()
+            .expect("submission id"),
+    )
+    .expect("submission uuid");
+    let author_comment_id = sqlx::query_scalar::<_, uuid::Uuid>(
+        "select id from comments where submission_id = $1 and is_primary = true",
+    )
+    .bind(submission_id)
+    .fetch_one(&pool)
+    .await
+    .expect("author comment id");
+
+    for uri in [
+        format!("/api/submissions/{submission_id}"),
+        format!("/api/comments/{author_comment_id}"),
+    ] {
+        let forbidden_request = Request::builder()
+            .method(Method::DELETE)
+            .uri(uri)
+            .header(header::COOKIE, format!("rimbun_session={other_session}"))
+            .body(Body::empty())
+            .expect("forbidden delete request");
+        let forbidden_response = app
+            .clone()
+            .oneshot(forbidden_request)
+            .await
+            .expect("forbidden delete response");
+        assert_eq!(forbidden_response.status(), StatusCode::FORBIDDEN);
+    }
+
+    let other_comment_request = Request::builder()
+        .method(Method::POST)
+        .uri(format!("/api/submissions/{submission_id}/comments"))
+        .header(header::COOKIE, format!("rimbun_session={other_session}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            json!({
+                "parent_comment_id": null,
+                "markdown_content": "Admin may delete this"
+            })
+            .to_string(),
+        ))
+        .expect("create other comment request");
+    let other_comment_response = app
+        .clone()
+        .oneshot(other_comment_request)
+        .await
+        .expect("create other comment response");
+    assert_eq!(other_comment_response.status(), StatusCode::OK);
+    let other_comment_body = to_bytes(other_comment_response.into_body(), usize::MAX)
+        .await
+        .expect("other comment body");
+    let other_comment_json: serde_json::Value =
+        serde_json::from_slice(&other_comment_body).expect("other comment json");
+    let other_comment_id = other_comment_json["id"].as_str().expect("other comment id");
+
+    let reply_request = Request::builder()
+        .method(Method::POST)
+        .uri(format!("/api/submissions/{submission_id}/comments"))
+        .header(header::COOKIE, format!("rimbun_session={author_session}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            json!({
+                "parent_comment_id": other_comment_id,
+                "markdown_content": "Reply remains visible"
+            })
+            .to_string(),
+        ))
+        .expect("create reply request");
+    let reply_response = app
+        .clone()
+        .oneshot(reply_request)
+        .await
+        .expect("create reply response");
+    assert_eq!(reply_response.status(), StatusCode::OK);
+    let reply_body = to_bytes(reply_response.into_body(), usize::MAX)
+        .await
+        .expect("reply body");
+    let reply_json: serde_json::Value = serde_json::from_slice(&reply_body).expect("reply json");
+    let reply_id =
+        uuid::Uuid::parse_str(reply_json["id"].as_str().expect("reply id")).expect("reply uuid");
+
+    let admin_delete_comment = Request::builder()
+        .method(Method::DELETE)
+        .uri(format!("/api/comments/{other_comment_id}"))
+        .header(header::COOKIE, format!("rimbun_session={admin_session}"))
+        .body(Body::empty())
+        .expect("admin delete comment request");
+    let admin_delete_comment_response = app
+        .clone()
+        .oneshot(admin_delete_comment)
+        .await
+        .expect("admin delete comment response");
+    assert_eq!(
+        admin_delete_comment_response.status(),
+        StatusCode::NO_CONTENT
+    );
+    let deleted_parent = sqlx::query_as::<_, (String, bool)>(
+        "select markdown_content, deleted_at is not null from comments where id = $1",
+    )
+    .bind(uuid::Uuid::parse_str(other_comment_id).expect("other comment uuid"))
+    .fetch_one(&pool)
+    .await
+    .expect("deleted parent state");
+    assert_eq!(deleted_parent, (String::new(), true));
+
+    let reply_after_parent_delete =
+        sqlx::query_as::<_, (String, Option<chrono::DateTime<chrono::Utc>>)>(
+            "select markdown_content, deleted_at from comments where id = $1",
+        )
+        .bind(reply_id)
+        .fetch_one(&pool)
+        .await
+        .expect("reply after parent delete");
+    assert_eq!(reply_after_parent_delete.0, "Reply remains visible");
+    assert!(reply_after_parent_delete.1.is_none());
+
+    let author_delete_comment = Request::builder()
+        .method(Method::DELETE)
+        .uri(format!("/api/comments/{author_comment_id}"))
+        .header(header::COOKIE, format!("rimbun_session={author_session}"))
+        .body(Body::empty())
+        .expect("author delete comment request");
+    let author_delete_comment_response = app
+        .clone()
+        .oneshot(author_delete_comment)
+        .await
+        .expect("author delete comment response");
+    assert_eq!(
+        author_delete_comment_response.status(),
+        StatusCode::NO_CONTENT
+    );
+
+    let replacement_primary_request = Request::builder()
+        .method(Method::POST)
+        .uri(format!("/api/submissions/{submission_id}/comments"))
+        .header(header::COOKIE, format!("rimbun_session={author_session}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            json!({
+                "parent_comment_id": null,
+                "markdown_content": "Replacement author comment",
+                "is_primary": true
+            })
+            .to_string(),
+        ))
+        .expect("replacement primary request");
+    let replacement_primary_response = app
+        .clone()
+        .oneshot(replacement_primary_request)
+        .await
+        .expect("replacement primary response");
+    assert_eq!(replacement_primary_response.status(), StatusCode::OK);
+
+    let author_delete_submission = Request::builder()
+        .method(Method::DELETE)
+        .uri(format!("/api/submissions/{submission_id}"))
+        .header(header::COOKIE, format!("rimbun_session={author_session}"))
+        .body(Body::empty())
+        .expect("author delete submission request");
+    let author_delete_submission_response = app
+        .clone()
+        .oneshot(author_delete_submission)
+        .await
+        .expect("author delete submission response");
+    assert_eq!(
+        author_delete_submission_response.status(),
+        StatusCode::NO_CONTENT
+    );
+
+    let soft_deleted = sqlx::query_scalar::<_, bool>(
+        "select soft_deleted from submission_moderation where submission_id = $1",
+    )
+    .bind(submission_id)
+    .fetch_one(&pool)
+    .await
+    .expect("soft-deleted state");
+    assert!(soft_deleted);
+
+    let deleted_comments_request = Request::builder()
+        .method(Method::GET)
+        .uri(format!("/api/submissions/{submission_id}/comments"))
+        .header(header::COOKIE, format!("rimbun_session={author_session}"))
+        .body(Body::empty())
+        .expect("deleted comments request");
+    let deleted_comments_response = app
+        .clone()
+        .oneshot(deleted_comments_request)
+        .await
+        .expect("deleted comments response");
+    assert_eq!(deleted_comments_response.status(), StatusCode::NOT_FOUND);
+
+    let submissions_request = Request::builder()
+        .method(Method::GET)
+        .uri(format!("/api/sections/{section_id}/submissions"))
+        .header(header::COOKIE, format!("rimbun_session={author_session}"))
+        .body(Body::empty())
+        .expect("submissions request");
+    let submissions_response = app
+        .clone()
+        .oneshot(submissions_request)
+        .await
+        .expect("submissions response");
+    assert_eq!(submissions_response.status(), StatusCode::OK);
+    let submissions_body = to_bytes(submissions_response.into_body(), usize::MAX)
+        .await
+        .expect("submissions body");
+    let visible_submissions: serde_json::Value =
+        serde_json::from_slice(&submissions_body).expect("submissions json");
+    assert_eq!(
+        visible_submissions
+            .as_array()
+            .expect("submissions array")
+            .len(),
+        0
+    );
+
+    let projection_count = sqlx::query_scalar::<_, i64>(
+        "select count(*)::bigint from section_projection_items where section_id = $1",
+    )
+    .bind(section_id)
+    .fetch_one(&pool)
+    .await
+    .expect("projection count");
+    assert_eq!(projection_count, 0);
+
+    let admin_target_publish = Request::builder()
+        .method(Method::POST)
+        .uri(format!("/api/sections/{section_id}/publish"))
+        .header(header::COOKIE, format!("rimbun_session={other_session}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            json!({
+                "base_submission_id": null,
+                "markdown_content": "Admin deletion target"
+            })
+            .to_string(),
+        ))
+        .expect("admin target publish request");
+    let admin_target_response = app
+        .clone()
+        .oneshot(admin_target_publish)
+        .await
+        .expect("admin target publish response");
+    assert_eq!(admin_target_response.status(), StatusCode::OK);
+    let admin_target_body = to_bytes(admin_target_response.into_body(), usize::MAX)
+        .await
+        .expect("admin target body");
+    let admin_target_json: serde_json::Value =
+        serde_json::from_slice(&admin_target_body).expect("admin target json");
+    let admin_target_id = admin_target_json["submission"]["id"]
+        .as_str()
+        .expect("admin target id");
+
+    let admin_delete_submission = Request::builder()
+        .method(Method::DELETE)
+        .uri(format!("/api/submissions/{admin_target_id}"))
+        .header(header::COOKIE, format!("rimbun_session={admin_session}"))
+        .body(Body::empty())
+        .expect("admin delete submission request");
+    let admin_delete_submission_response = app
+        .clone()
+        .oneshot(admin_delete_submission)
+        .await
+        .expect("admin delete submission response");
+    assert_eq!(
+        admin_delete_submission_response.status(),
+        StatusCode::NO_CONTENT
+    );
 }

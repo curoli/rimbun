@@ -118,6 +118,18 @@ export function createSubmissionComment(submissionId: string, payload: {
   });
 }
 
+export function deleteSubmission(submissionId: string) {
+  return apiRequest<void>(`/api/submissions/${submissionId}`, {
+    method: "DELETE",
+  });
+}
+
+export function deleteComment(commentId: string) {
+  return apiRequest<void>(`/api/comments/${commentId}`, {
+    method: "DELETE",
+  });
+}
+
 export function setPreferredBase(sectionId: string, preferredBaseSubmissionId: string) {
   return apiRequest<{ preferred_base_submission_id: string }>(
     `/api/sections/${sectionId}/preferences/base-submission`,

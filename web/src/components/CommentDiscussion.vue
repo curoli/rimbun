@@ -8,6 +8,8 @@ import MarkdownContent from "./MarkdownContent.vue";
 const props = defineProps<{
   compare: SectionCompareDto;
   canComment: boolean;
+  currentUserId: string | null;
+  isAdmin: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -16,6 +18,8 @@ const emit = defineEmits<{
     parentCommentId: string | null;
     markdownContent: string;
   }];
+  deleteSubmission: [submissionId: string];
+  deleteComment: [commentId: string];
 }>();
 
 const rootDrafts = reactive<Record<string, string>>({});
@@ -58,6 +62,10 @@ function submissionLabel(submission: SubmissionSummaryDto) {
   return `${submission.display_name} @${submission.username}`;
 }
 
+function canDeleteSubmission(submission: SubmissionSummaryDto) {
+  return props.isAdmin || props.currentUserId === submission.user_id;
+}
+
 function submitRootComment(submissionId: string) {
   const markdownContent = (rootDrafts[submissionId] ?? "").trim();
   if (!markdownContent) {
@@ -91,6 +99,14 @@ function submitReply(
         <span v-if="submission.support_percent !== null" class="support">
           {{ submission.support_percent.toFixed(0) }}%
         </span>
+        <button
+          v-if="canDeleteSubmission(submission)"
+          type="button"
+          class="delete-button"
+          @click="emit('deleteSubmission', submission.submission_id)"
+        >
+          {{ $t("Delete contribution") }}
+        </button>
       </header>
 
       <section class="contribution-text">
@@ -104,7 +120,10 @@ function submitReply(
           :key="comment.id"
           :node="comment"
           :can-comment="canComment"
+          :current-user-id="currentUserId"
+          :is-admin="isAdmin"
           @reply="submitReply(submission.submission_id, $event)"
+          @delete="emit('deleteComment', $event)"
         />
       </div>
       <p v-else class="empty-comments">{{ $t("No comments yet.") }}</p>
@@ -166,7 +185,7 @@ function submitReply(
 
 .version-heading {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   gap: 0.75rem;
   align-items: start;
 }
@@ -194,6 +213,16 @@ function submitReply(
   background: var(--accent-soft);
   color: var(--accent-contrast);
   font-size: 0.75rem;
+}
+
+.delete-button {
+  border: 0;
+  padding: 0.25rem 0;
+  background: transparent;
+  color: var(--danger);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.78rem;
 }
 
 .comment-list {
@@ -238,5 +267,23 @@ textarea {
 .new-comment-form button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+@media (max-width: 640px) {
+  .version-heading {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .support {
+    grid-row: 2;
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .delete-button {
+    grid-row: 3;
+    grid-column: 2;
+    justify-self: start;
+  }
 }
 </style>

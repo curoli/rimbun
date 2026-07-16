@@ -14,6 +14,7 @@ const props = defineProps<{
   projection: ProjectionItemRecord[];
   preferredBaseSubmissionId: string | null;
   currentUserId: string | null;
+  isAdmin: boolean;
   canComment: boolean;
 }>();
 
@@ -25,6 +26,8 @@ const emit = defineEmits<{
     markdownContent: string;
     isPrimary?: boolean;
   }];
+  deleteSubmission: [submissionId: string];
+  deleteComment: [commentId: string];
 }>();
 
 const rootDrafts = reactive<Record<string, string>>({});
@@ -126,12 +129,24 @@ function commentsForSubmission(submissionId: string): CommentTreeNode[] {
 
 function hasPrimaryComment(submissionId: string) {
   return props.comments.some(
-    (comment) => comment.submission_id === submissionId && comment.is_primary && !comment.parent_comment_id,
+    (comment) =>
+      comment.submission_id === submissionId &&
+      comment.is_primary &&
+      !comment.parent_comment_id &&
+      !comment.deleted_at,
   );
 }
 
 function canAddPrimaryComment(submission: SubmissionRecord) {
   return props.currentUserId === submission.user_id && !hasPrimaryComment(submission.id);
+}
+
+function canDeleteSubmission(submission: SubmissionRecord) {
+  return props.isAdmin || props.currentUserId === submission.user_id;
+}
+
+function canDeleteComment(comment: CommentRecord) {
+  return !comment.deleted_at && (props.isAdmin || props.currentUserId === comment.user_id);
 }
 
 function submitRootComment(submissionId: string, isPrimary = false) {
@@ -184,7 +199,12 @@ function submitReply(submissionId: string, parentCommentId: string) {
             <span class="badge main-badge">{{ $t(roleLabel(mainSubmission.id)) }}</span>
             <strong>{{ authorLabel(mainSubmission) }}</strong>
           </div>
-          <time>{{ $date(mainSubmission.published_at) }}</time>
+          <div class="meta-actions">
+            <time>{{ $date(mainSubmission.published_at) }}</time>
+            <button v-if="canDeleteSubmission(mainSubmission)" class="delete-action" @click="emit('deleteSubmission', mainSubmission.id)">
+              {{ $t("Delete contribution") }}
+            </button>
+          </div>
         </div>
         <pre>{{ mainSubmission.markdown_content }}</pre>
         <div class="comment-thread">
@@ -195,9 +215,11 @@ function submitReply(submissionId: string, parentCommentId: string) {
                 <div class="comment-meta-right">
                   <span v-if="comment.is_primary" class="badge primary-badge">{{ $t("primary comment") }}</span>
                   <time>{{ $date(comment.created_at) }}</time>
+                  <button v-if="canDeleteComment(comment)" class="delete-action" @click="emit('deleteComment', comment.id)">{{ $t("Delete") }}</button>
                 </div>
               </div>
-              <MarkdownContent class="comment-markdown" :source="comment.markdown_content" />
+              <p v-if="comment.deleted_at" class="deleted-comment">{{ $t("This comment was deleted.") }}</p>
+              <MarkdownContent v-else class="comment-markdown" :source="comment.markdown_content" />
               <button v-if="canComment" class="reply-toggle" @click="replyTargets[comment.id] = !replyTargets[comment.id]">
                 {{ replyTargets[comment.id] ? $t("Cancel reply") : $t("Reply") }}
               </button>
@@ -209,9 +231,13 @@ function submitReply(submissionId: string, parentCommentId: string) {
                 <div v-for="reply in comment.replies" :key="reply.id" class="comment-card reply-card">
                   <div class="comment-meta">
                     <strong>{{ commentAuthorLabel(reply) }}</strong>
-                    <time>{{ $date(reply.created_at) }}</time>
+                    <div class="comment-meta-right">
+                      <time>{{ $date(reply.created_at) }}</time>
+                      <button v-if="canDeleteComment(reply)" class="delete-action" @click="emit('deleteComment', reply.id)">{{ $t("Delete") }}</button>
+                    </div>
                   </div>
-                  <MarkdownContent class="comment-markdown" :source="reply.markdown_content" />
+                  <p v-if="reply.deleted_at" class="deleted-comment">{{ $t("This comment was deleted.") }}</p>
+                  <MarkdownContent v-else class="comment-markdown" :source="reply.markdown_content" />
                 </div>
               </div>
             </div>
@@ -249,7 +275,12 @@ function submitReply(submissionId: string, parentCommentId: string) {
             <span class="badge">{{ $t(roleLabel(submission.id)) }}</span>
             <strong>{{ authorLabel(submission) }}</strong>
           </div>
-          <time>{{ $date(submission.published_at) }}</time>
+          <div class="meta-actions">
+            <time>{{ $date(submission.published_at) }}</time>
+            <button v-if="canDeleteSubmission(submission)" class="delete-action" @click="emit('deleteSubmission', submission.id)">
+              {{ $t("Delete contribution") }}
+            </button>
+          </div>
         </div>
         <pre>{{ submission.markdown_content }}</pre>
         <div class="comment-thread">
@@ -260,9 +291,11 @@ function submitReply(submissionId: string, parentCommentId: string) {
                 <div class="comment-meta-right">
                   <span v-if="comment.is_primary" class="badge primary-badge">{{ $t("primary comment") }}</span>
                   <time>{{ $date(comment.created_at) }}</time>
+                  <button v-if="canDeleteComment(comment)" class="delete-action" @click="emit('deleteComment', comment.id)">{{ $t("Delete") }}</button>
                 </div>
               </div>
-              <MarkdownContent class="comment-markdown" :source="comment.markdown_content" />
+              <p v-if="comment.deleted_at" class="deleted-comment">{{ $t("This comment was deleted.") }}</p>
+              <MarkdownContent v-else class="comment-markdown" :source="comment.markdown_content" />
               <button v-if="canComment" class="reply-toggle" @click="replyTargets[comment.id] = !replyTargets[comment.id]">
                 {{ replyTargets[comment.id] ? $t("Cancel reply") : $t("Reply") }}
               </button>
@@ -274,9 +307,13 @@ function submitReply(submissionId: string, parentCommentId: string) {
                 <div v-for="reply in comment.replies" :key="reply.id" class="comment-card reply-card">
                   <div class="comment-meta">
                     <strong>{{ commentAuthorLabel(reply) }}</strong>
-                    <time>{{ $date(reply.created_at) }}</time>
+                    <div class="comment-meta-right">
+                      <time>{{ $date(reply.created_at) }}</time>
+                      <button v-if="canDeleteComment(reply)" class="delete-action" @click="emit('deleteComment', reply.id)">{{ $t("Delete") }}</button>
+                    </div>
                   </div>
-                  <MarkdownContent class="comment-markdown" :source="reply.markdown_content" />
+                  <p v-if="reply.deleted_at" class="deleted-comment">{{ $t("This comment was deleted.") }}</p>
+                  <MarkdownContent v-else class="comment-markdown" :source="reply.markdown_content" />
                 </div>
               </div>
             </div>
@@ -314,7 +351,12 @@ function submitReply(submissionId: string, parentCommentId: string) {
             <span class="badge">{{ $t(roleLabel(submission.id)) }}</span>
             <strong>{{ authorLabel(submission) }}</strong>
           </div>
-          <time>{{ $date(submission.published_at) }}</time>
+          <div class="meta-actions">
+            <time>{{ $date(submission.published_at) }}</time>
+            <button v-if="canDeleteSubmission(submission)" class="delete-action" @click="emit('deleteSubmission', submission.id)">
+              {{ $t("Delete contribution") }}
+            </button>
+          </div>
         </div>
         <pre>{{ submission.markdown_content }}</pre>
         <div class="comment-thread">
@@ -325,9 +367,11 @@ function submitReply(submissionId: string, parentCommentId: string) {
                 <div class="comment-meta-right">
                   <span v-if="comment.is_primary" class="badge primary-badge">{{ $t("primary comment") }}</span>
                   <time>{{ $date(comment.created_at) }}</time>
+                  <button v-if="canDeleteComment(comment)" class="delete-action" @click="emit('deleteComment', comment.id)">{{ $t("Delete") }}</button>
                 </div>
               </div>
-              <MarkdownContent class="comment-markdown" :source="comment.markdown_content" />
+              <p v-if="comment.deleted_at" class="deleted-comment">{{ $t("This comment was deleted.") }}</p>
+              <MarkdownContent v-else class="comment-markdown" :source="comment.markdown_content" />
               <button v-if="canComment" class="reply-toggle" @click="replyTargets[comment.id] = !replyTargets[comment.id]">
                 {{ replyTargets[comment.id] ? $t("Cancel reply") : $t("Reply") }}
               </button>
@@ -339,9 +383,13 @@ function submitReply(submissionId: string, parentCommentId: string) {
                 <div v-for="reply in comment.replies" :key="reply.id" class="comment-card reply-card">
                   <div class="comment-meta">
                     <strong>{{ commentAuthorLabel(reply) }}</strong>
-                    <time>{{ $date(reply.created_at) }}</time>
+                    <div class="comment-meta-right">
+                      <time>{{ $date(reply.created_at) }}</time>
+                      <button v-if="canDeleteComment(reply)" class="delete-action" @click="emit('deleteComment', reply.id)">{{ $t("Delete") }}</button>
+                    </div>
                   </div>
-                  <MarkdownContent class="comment-markdown" :source="reply.markdown_content" />
+                  <p v-if="reply.deleted_at" class="deleted-comment">{{ $t("This comment was deleted.") }}</p>
+                  <MarkdownContent v-else class="comment-markdown" :source="reply.markdown_content" />
                 </div>
               </div>
             </div>
@@ -370,6 +418,29 @@ function submitReply(submissionId: string, parentCommentId: string) {
   display: flex;
   flex-direction: column;
   gap: 1.35rem;
+}
+
+.meta-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.3rem;
+}
+
+.delete-action {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--danger);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.78rem;
+}
+
+.deleted-comment {
+  margin: 0.55rem 0 0;
+  color: var(--text-muted);
+  font-style: italic;
 }
 
 .submissions-header h3,

@@ -75,6 +75,8 @@ export type CommentRecord = {
   markdown_content: string;
   is_primary: boolean;
   created_at: string;
+  deleted_at: string | null;
+  deleted_by: string | null;
 };
 
 export type CommentTreeNode = CommentRecord & {

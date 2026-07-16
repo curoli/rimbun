@@ -2,7 +2,16 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
-import { createSubmissionComment, getDocument, getSectionView, publishSection, saveDraft, setPreferredBase } from "../api/documents";
+import {
+  createSubmissionComment,
+  deleteComment,
+  deleteSubmission,
+  getDocument,
+  getSectionView,
+  publishSection,
+  saveDraft,
+  setPreferredBase,
+} from "../api/documents";
 import type { CommentRecord, DocumentDetailResponse, SectionViewResponse } from "../api/types";
 import DocumentViewNav from "../components/DocumentViewNav.vue";
 import SectionEditor from "../components/SectionEditor.vue";
@@ -182,6 +191,32 @@ async function handleCreateComment(payload: {
   }
 }
 
+async function handleDeleteSubmission(submissionId: string) {
+  if (!window.confirm(t("Delete this contribution? Its comments will no longer be visible."))) {
+    return;
+  }
+  error.value = null;
+  try {
+    await deleteSubmission(submissionId);
+    await loadSectionView();
+  } catch (deleteError) {
+    error.value = deleteError instanceof Error ? deleteError.message : "Failed to delete contribution";
+  }
+}
+
+async function handleDeleteComment(commentId: string) {
+  if (!window.confirm(t("Delete this comment? Replies will remain visible."))) {
+    return;
+  }
+  error.value = null;
+  try {
+    await deleteComment(commentId);
+    await loadSectionView();
+  } catch (deleteError) {
+    error.value = deleteError instanceof Error ? deleteError.message : "Failed to delete comment";
+  }
+}
+
 async function handleSetBase(submissionId: string) {
   const sectionId = selectedSection.value?.id;
   if (!sectionId) {
@@ -268,9 +303,12 @@ onMounted(async () => {
           :projection="sectionView.projection"
           :preferred-base-submission-id="sectionView.preferred_base_submission_id"
           :current-user-id="auth.user?.id ?? null"
+          :is-admin="auth.user?.role === 'admin'"
           :can-comment="Boolean(auth.user)"
           @set-base="handleSetBase"
           @create-comment="handleCreateComment"
+          @delete-submission="handleDeleteSubmission"
+          @delete-comment="handleDeleteComment"
         />
         <p v-else class="empty-note">{{ $t("This section has no own text. Only its subsections contribute content.") }}</p>
       </div>
