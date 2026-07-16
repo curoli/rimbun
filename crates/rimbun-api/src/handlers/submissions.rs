@@ -6,7 +6,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    db::{comments, moderation, projections, sections, submissions},
+    db::{comments, drafts, moderation, projections, sections, submissions},
     error::ApiError,
     http::extractors::{maybe_current_user, require_current_user},
     state::AppState,
@@ -87,6 +87,10 @@ pub async fn publish(
         .await
         .map_err(|err| ApiError::internal(err.to_string()))?;
     }
+
+    drafts::delete_for_user_in_tx(&mut tx, section_id, user.id)
+        .await
+        .map_err(|err| ApiError::internal(err.to_string()))?;
 
     tx.commit()
         .await

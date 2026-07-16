@@ -12,7 +12,7 @@ import {
   saveDraft,
   setPreferredBase,
 } from "../api/documents";
-import type { CommentRecord, DocumentDetailResponse, SectionViewResponse } from "../api/types";
+import type { DocumentDetailResponse, SectionViewResponse } from "../api/types";
 import DocumentViewNav from "../components/DocumentViewNav.vue";
 import SectionEditor from "../components/SectionEditor.vue";
 import SubmissionList from "../components/SubmissionList.vue";
@@ -28,6 +28,7 @@ const documentData = ref<DocumentDetailResponse | null>(null);
 const sectionView = ref<SectionViewResponse | null>(null);
 const draftContent = ref("");
 const draftMainComment = ref("");
+const draftBaseSubmissionId = ref<string | null>(null);
 const isLoadingSection = ref(true);
 const saveState = ref<"idle" | "saving">("idle");
 const publishState = ref<"idle" | "publishing">("idle");
@@ -66,7 +67,9 @@ const personalBaseSubmission = computed(() => {
 });
 
 const sectionHeadingLabel = computed(() =>
-  selectedSection.value?.has_heading ? selectedSection.value.title : t("No heading"),
+  selectedSection.value?.has_heading
+    ? selectedSection.value.title
+    : sectionNumber.value || t("No heading"),
 );
 
 function submissionLabel(submission: SectionViewResponse["active_submissions"][number]) {
@@ -76,32 +79,27 @@ function submissionLabel(submission: SectionViewResponse["active_submissions"][n
 function syncDraftFromView(view: SectionViewResponse | null) {
   if (!view) {
     draftContent.value = "";
+    draftMainComment.value = "";
+    draftBaseSubmissionId.value = null;
     return;
   }
 
   if (view.draft) {
     draftContent.value = view.draft.markdown_content;
     draftMainComment.value = view.draft.main_comment_markdown ?? "";
+    draftBaseSubmissionId.value = view.draft.base_submission_id;
     return;
   }
 
-  const preferred =
-    view.active_submissions.find((submission) => submission.id === view.preferred_base_submission_id) ??
+  const main =
     view.active_submissions.find(
       (submission) => view.projection.find((item) => item.submission_id === submission.id)?.role === "main",
     ) ??
     view.active_submissions[0];
 
-  draftContent.value = preferred?.markdown_content ?? "";
-  draftMainComment.value = preferred ? primaryCommentForSubmission(view, preferred.id)?.markdown_content ?? "" : "";
-}
-
-function primaryCommentForSubmission(view: SectionViewResponse, submissionId: string) {
-  return (
-    view.submission_comments.find(
-      (comment) => comment.submission_id === submissionId && comment.is_primary && !comment.parent_comment_id,
-    ) ?? null
-  );
+  draftContent.value = main?.markdown_content ?? "";
+  draftMainComment.value = "";
+  draftBaseSubmissionId.value = main?.id ?? null;
 }
 
 async function loadSectionView() {
@@ -138,7 +136,7 @@ async function handleSaveDraft() {
   error.value = null;
   try {
     await saveDraft(sectionId, {
-      base_submission_id: sectionView.value?.preferred_base_submission_id ?? null,
+      base_submission_id: draftBaseSubmissionId.value,
       markdown_content: draftContent.value,
       main_comment_markdown: draftMainComment.value.trim() || null,
     });
@@ -160,7 +158,7 @@ async function handlePublish() {
   error.value = null;
   try {
     await publishSection(sectionId, {
-      base_submission_id: sectionView.value?.preferred_base_submission_id ?? null,
+      base_submission_id: draftBaseSubmissionId.value,
       markdown_content: draftContent.value,
       main_comment_markdown: draftMainComment.value.trim() || null,
     });

@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use sqlx::{FromRow, PgPool};
+use sqlx::{FromRow, PgPool, Postgres, Transaction};
 
 #[derive(Debug, Clone, FromRow, Serialize)]
 pub struct DraftRecord {
@@ -74,4 +74,18 @@ pub async fn find_by_section_and_user(
     .await?;
 
     Ok(record)
+}
+
+pub async fn delete_for_user_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    section_id: uuid::Uuid,
+    user_id: uuid::Uuid,
+) -> anyhow::Result<()> {
+    sqlx::query("delete from drafts where section_id = $1 and user_id = $2")
+        .bind(section_id)
+        .bind(user_id)
+        .execute(&mut **tx)
+        .await?;
+
+    Ok(())
 }

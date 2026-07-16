@@ -769,6 +769,26 @@ async fn publish_rebuilds_projection_and_supersedes_previous_submission() {
     .await
     .expect("build app");
 
+    sqlx::query(
+        r#"
+        insert into drafts (
+          id,
+          section_id,
+          user_id,
+          base_submission_id,
+          markdown_content,
+          main_comment_markdown
+        )
+        values ($1, $2, $3, null, 'Version A1', 'Draft comment')
+        "#,
+    )
+    .bind(uuid::Uuid::new_v4())
+    .bind(section_id)
+    .bind(user_a_id)
+    .execute(&pool)
+    .await
+    .expect("insert draft before publishing");
+
     for (cookie, body) in [
         (
             format!("rimbun_session={session_a}"),
@@ -834,6 +854,14 @@ async fn publish_rebuilds_projection_and_supersedes_previous_submission() {
         active_submissions,
         vec![("Version A2".to_owned(),), ("Version B1".to_owned(),)]
     );
+
+    let remaining_drafts =
+        sqlx::query_scalar::<_, i64>("select count(*)::bigint from drafts where section_id = $1")
+            .bind(section_id)
+            .fetch_one(&pool)
+            .await
+            .expect("count drafts after publishing");
+    assert_eq!(remaining_drafts, 0);
 
     let projection = sqlx::query_as::<_, (String, i32)>(
         r#"
