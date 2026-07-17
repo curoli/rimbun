@@ -2,11 +2,12 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
-import { createSection, getDocument, updateSection } from "../api/documents";
+import { createSection, deleteSection, getDocument, updateSection } from "../api/documents";
 import type { DocumentDetailResponse } from "../api/types";
 import DocumentViewNav from "../components/DocumentViewNav.vue";
 import SectionTree from "../components/SectionTree.vue";
 import { useAuthStore } from "../stores/auth";
+import { t } from "../i18n";
 
 const route = useRoute();
 const router = useRouter();
@@ -17,6 +18,7 @@ const selectedSectionId = ref<string | null>(null);
 const isLoadingDocument = ref(true);
 const createSectionState = ref<"idle" | "creating">("idle");
 const updateSectionState = ref<"idle" | "saving">("idle");
+const deleteSectionState = ref<"idle" | "deleting">("idle");
 const error = ref<string | null>(null);
 const createSectionError = ref<string | null>(null);
 const updateSectionError = ref<string | null>(null);
@@ -47,6 +49,13 @@ const siblingSections = computed(() => {
 const selectedSiblingIndex = computed(() =>
   siblingSections.value.findIndex((section) => section.id === selectedSection.value?.id),
 );
+const selectedDescendantCount = computed(() => {
+  if (!documentData.value || !selectedSection.value) {
+    return 0;
+  }
+  const pathPrefix = `${selectedSection.value.path}/`;
+  return documentData.value.sections.filter((section) => section.path.startsWith(pathPrefix)).length;
+});
 const eligibleParentSections = computed(() => {
   if (!documentData.value || !selectedSection.value) {
     return documentData.value?.sections ?? [];
@@ -208,6 +217,36 @@ async function handleUpdateSection() {
       updateError instanceof Error ? updateError.message : "Failed to update section";
   } finally {
     updateSectionState.value = "idle";
+  }
+}
+
+async function handleDeleteSection() {
+  const section = selectedSection.value;
+  if (!section || deleteSectionState.value === "deleting") {
+    return;
+  }
+
+  const confirmation = selectedDescendantCount.value > 0
+    ? t("Delete this section and all subsections ({count})? All associated contributions, drafts, and comments will be deleted.", {
+        count: selectedDescendantCount.value,
+      })
+    : t("Delete this section? All associated contributions, drafts, and comments will be deleted.");
+  if (!window.confirm(confirmation)) {
+    return;
+  }
+
+  deleteSectionState.value = "deleting";
+  updateSectionError.value = null;
+  const nextSelection = section.parent_id;
+  try {
+    await deleteSection(section.id);
+    selectedSectionId.value = nextSelection;
+    await loadDocument();
+  } catch (deleteError) {
+    updateSectionError.value =
+      deleteError instanceof Error ? deleteError.message : "Failed to delete section";
+  } finally {
+    deleteSectionState.value = "idle";
   }
 }
 
@@ -446,6 +485,26 @@ onMounted(async () => {
                 {{ updateSectionState === "saving" ? $t("Saving...") : $t("Save section") }}
               </button>
             </div>
+            <div class="danger-zone">
+              <div>
+                <strong>{{ $t("Delete section") }}</strong>
+                <p>
+                  {{
+                    selectedDescendantCount > 0
+                      ? $t("This also deletes all subsections ({count}) and their content.", { count: selectedDescendantCount })
+                      : $t("This permanently deletes the section and its content.")
+                  }}
+                </p>
+              </div>
+              <button
+                type="button"
+                class="delete-button"
+                :disabled="deleteSectionState === 'deleting' || updateSectionState === 'saving'"
+                @click="handleDeleteSection"
+              >
+                {{ deleteSectionState === "deleting" ? $t("Deleting...") : $t("Delete section") }}
+              </button>
+            </div>
             <p v-if="updateSectionError" class="error">{{ $t(updateSectionError) }}</p>
           </form>
 
@@ -586,11 +645,48 @@ onMounted(async () => {
   color: var(--danger);
 }
 
+.danger-zone {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem;
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border-soft));
+  border-radius: 0.95rem;
+  background: color-mix(in srgb, var(--danger) 7%, var(--surface-input));
+}
+
+.danger-zone p {
+  margin: 0.25rem 0 0;
+  color: var(--text-secondary);
+}
+
+.delete-button {
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 0.85rem;
+  padding: 0.75rem 1rem;
+  background: var(--danger);
+  color: white;
+  cursor: pointer;
+}
+
+.delete-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 @media (max-width: 960px) {
   .section-create-controls,
   .section-edit-grid {
     flex-direction: column;
     display: flex;
+  }
+
+
+  .danger-zone {
+    align-items: stretch;
+    flex-direction: column;
   }
 }
 </style>

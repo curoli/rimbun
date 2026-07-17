@@ -79,7 +79,9 @@ pub async fn build(config: Config) -> anyhow::Result<Router> {
         )
         .route(
             "/api/sections/{id}",
-            get(crate::handlers::sections::show).patch(crate::handlers::sections::update),
+            get(crate::handlers::sections::show)
+                .patch(crate::handlers::sections::update)
+                .delete(crate::handlers::sections::delete),
         )
         .route(
             "/api/sections/{id}/view",

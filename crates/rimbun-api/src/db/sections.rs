@@ -327,6 +327,68 @@ pub async fn move_section(
     Ok(Some(record))
 }
 
+pub async fn delete_subtree(pool: &PgPool, section_id: uuid::Uuid) -> anyhow::Result<bool> {
+    let mut tx = pool.begin().await?;
+    let current = sqlx::query_as::<_, SectionRecord>(
+        r#"
+        select id, document_id, parent_id, title, has_heading, has_own_text, position, path, created_at
+        from sections
+        where id = $1
+        for update
+        "#,
+    )
+    .bind(section_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let Some(current) = current else {
+        tx.rollback().await?;
+        return Ok(false);
+    };
+
+    let subtree_submission_ids = r#"
+        select submission.id
+        from submissions submission
+        join sections section on section.id = submission.section_id
+        where section.path = $1 or section.path like $1 || '/%'
+    "#;
+
+    sqlx::query(&format!(
+        "update submissions set base_submission_id = null where base_submission_id in ({subtree_submission_ids})"
+    ))
+    .bind(&current.path)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(&format!(
+        "update submissions set superseded_by = null where superseded_by in ({subtree_submission_ids})"
+    ))
+    .bind(&current.path)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(&format!(
+        "update drafts set base_submission_id = null where base_submission_id in ({subtree_submission_ids})"
+    ))
+    .bind(&current.path)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(&format!(
+        "delete from user_section_preferences where preferred_base_submission_id in ({subtree_submission_ids})"
+    ))
+    .bind(&current.path)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query("delete from sections where id = $1")
+        .bind(section_id)
+        .execute(&mut *tx)
+        .await?;
+
+    normalize_group_positions(&mut tx, current.document_id, current.parent_id, None, None).await?;
+
+    tx.commit().await?;
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{descendant_rewritten_path, normalized_order};

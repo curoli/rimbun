@@ -77,6 +77,12 @@ export function updateSection(
   });
 }
 
+export function deleteSection(sectionId: string) {
+  return apiRequest<void>(`/api/sections/${sectionId}`, {
+    method: "DELETE",
+  });
+}
+
 export function getSectionView(sectionId: string) {
   return apiRequest<SectionViewResponse>(`/api/sections/${sectionId}/view`);
 }

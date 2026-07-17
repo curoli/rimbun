@@ -321,6 +321,168 @@ async fn patch_section_moves_section_and_rewrites_descendants() {
 }
 
 #[tokio::test]
+async fn admin_can_delete_section_subtree_and_clean_external_references() {
+    let Some(pool) = test_pool().await else {
+        eprintln!("Skipping integration test: TEST_DATABASE_URL not set or unreachable");
+        return;
+    };
+    reset_schema(&pool).await;
+
+    let (admin_id, admin_session) = seed_admin_user(&pool).await;
+    let (normal_id, normal_session) = seed_user_with_role(&pool, "normal").await;
+    let (document_id, parent_a, parent_b, child) = seed_document_tree(&pool, admin_id).await;
+    let grandchild = seed_nested_descendant(&pool, document_id, child).await;
+    let deleted_submission_id = uuid::Uuid::new_v4();
+    let external_submission_id = uuid::Uuid::new_v4();
+
+    sqlx::query(
+        r#"
+        insert into submissions (id, section_id, user_id, markdown_content, status)
+        values ($1, $2, $3, 'Deleted subtree contribution', 'published')
+        "#,
+    )
+    .bind(deleted_submission_id)
+    .bind(child)
+    .bind(normal_id)
+    .execute(&pool)
+    .await
+    .expect("insert subtree submission");
+    sqlx::query(
+        r#"
+        insert into submissions (id, section_id, user_id, base_submission_id, markdown_content, status)
+        values ($1, $2, $3, $4, 'External contribution', 'published')
+        "#,
+    )
+    .bind(external_submission_id)
+    .bind(parent_b)
+    .bind(normal_id)
+    .bind(deleted_submission_id)
+    .execute(&pool)
+    .await
+    .expect("insert external submission");
+    sqlx::query(
+        r#"
+        insert into drafts (id, section_id, user_id, base_submission_id, markdown_content)
+        values ($1, $2, $3, $4, 'External draft')
+        "#,
+    )
+    .bind(uuid::Uuid::new_v4())
+    .bind(parent_b)
+    .bind(normal_id)
+    .bind(deleted_submission_id)
+    .execute(&pool)
+    .await
+    .expect("insert external draft");
+    sqlx::query(
+        r#"
+        insert into user_section_preferences (user_id, section_id, preferred_base_submission_id)
+        values ($1, $2, $3)
+        "#,
+    )
+    .bind(normal_id)
+    .bind(parent_b)
+    .bind(deleted_submission_id)
+    .execute(&pool)
+    .await
+    .expect("insert external preference");
+    sqlx::query(
+        r#"
+        insert into comments (id, submission_id, user_id, markdown_content)
+        values ($1, $2, $3, 'Deleted subtree comment')
+        "#,
+    )
+    .bind(uuid::Uuid::new_v4())
+    .bind(deleted_submission_id)
+    .bind(normal_id)
+    .execute(&pool)
+    .await
+    .expect("insert subtree comment");
+
+    let app = app::build(test_config(
+        std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL"),
+    ))
+    .await
+    .expect("build app");
+
+    let forbidden_request = Request::builder()
+        .method(Method::DELETE)
+        .uri(format!("/api/sections/{parent_a}"))
+        .header(header::COOKIE, format!("rimbun_session={normal_session}"))
+        .body(Body::empty())
+        .expect("normal user delete request");
+    let forbidden_response = app
+        .clone()
+        .oneshot(forbidden_request)
+        .await
+        .expect("normal user delete response");
+    assert_eq!(forbidden_response.status(), StatusCode::FORBIDDEN);
+
+    let delete_request = Request::builder()
+        .method(Method::DELETE)
+        .uri(format!("/api/sections/{parent_a}"))
+        .header(header::COOKIE, format!("rimbun_session={admin_session}"))
+        .body(Body::empty())
+        .expect("admin delete request");
+    let delete_response = app
+        .clone()
+        .oneshot(delete_request)
+        .await
+        .expect("admin delete response");
+    assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
+
+    let remaining_sections = sqlx::query_as::<_, (uuid::Uuid, i32)>(
+        "select id, position from sections where document_id = $1 order by position",
+    )
+    .bind(document_id)
+    .fetch_all(&pool)
+    .await
+    .expect("remaining sections");
+    assert_eq!(remaining_sections, vec![(parent_b, 0)]);
+    for deleted_section_id in [parent_a, child, grandchild] {
+        assert!(
+            !remaining_sections
+                .iter()
+                .any(|(section_id, _)| *section_id == deleted_section_id)
+        );
+    }
+
+    let deleted_submission_count =
+        sqlx::query_scalar::<_, i64>("select count(*)::bigint from submissions where id = $1")
+            .bind(deleted_submission_id)
+            .fetch_one(&pool)
+            .await
+            .expect("deleted submission count");
+    assert_eq!(deleted_submission_count, 0);
+
+    let external_base = sqlx::query_scalar::<_, Option<uuid::Uuid>>(
+        "select base_submission_id from submissions where id = $1",
+    )
+    .bind(external_submission_id)
+    .fetch_one(&pool)
+    .await
+    .expect("external submission base");
+    assert_eq!(external_base, None);
+    let draft_base = sqlx::query_scalar::<_, Option<uuid::Uuid>>(
+        "select base_submission_id from drafts where section_id = $1 and user_id = $2",
+    )
+    .bind(parent_b)
+    .bind(normal_id)
+    .fetch_one(&pool)
+    .await
+    .expect("external draft base");
+    assert_eq!(draft_base, None);
+    let preference_count = sqlx::query_scalar::<_, i64>(
+        "select count(*)::bigint from user_section_preferences where user_id = $1 and section_id = $2",
+    )
+    .bind(normal_id)
+    .bind(parent_b)
+    .fetch_one(&pool)
+    .await
+    .expect("external preference count");
+    assert_eq!(preference_count, 0);
+}
+
+#[tokio::test]
 async fn patch_section_rejects_move_into_own_subtree() {
     let Some(pool) = test_pool().await else {
         eprintln!("Skipping integration test: TEST_DATABASE_URL not set or unreachable");

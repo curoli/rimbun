@@ -1,7 +1,7 @@
 use axum::{
     Json,
     extract::{Path, State},
-    http::HeaderMap,
+    http::{HeaderMap, StatusCode},
 };
 use serde::{Deserialize, Serialize};
 
@@ -176,6 +176,26 @@ pub async fn update(
     .ok_or_else(|| ApiError::not_found("section not found"))?;
 
     Ok(Json(section))
+}
+
+pub async fn delete(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<uuid::Uuid>,
+) -> Result<StatusCode, ApiError> {
+    let user = require_current_user(State(state.clone()), &headers).await?;
+    if user.role != "admin" {
+        return Err(ApiError::forbidden("admin role required"));
+    }
+
+    let deleted = sections::delete_subtree(&state.pool, id)
+        .await
+        .map_err(|err| ApiError::internal(err.to_string()))?;
+    if !deleted {
+        return Err(ApiError::not_found("section not found"));
+    }
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn view(
