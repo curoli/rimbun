@@ -504,15 +504,24 @@ async function loadDocument() {
     const data = await getDocument(documentRef);
     documentData.value = data;
     if (documentRef !== data.document.slug) {
-      await router.replace(`/documents/${data.document.slug}`);
+      await router.replace({
+        path: `/documents/${data.document.slug}`,
+        query: route.query,
+      });
       return;
     }
+    const requestedSectionId = typeof route.query.section === "string" ? route.query.section : null;
     selectedSectionId.value =
-      selectedSectionId.value && data.sections.some((section) => section.id === selectedSectionId.value)
+      requestedSectionId && data.sections.some((section) => section.id === requestedSectionId)
+        ? requestedSectionId
+        : selectedSectionId.value && data.sections.some((section) => section.id === selectedSectionId.value)
         ? selectedSectionId.value
         : data.sections[0]?.id ?? null;
     await loadSectionCompares(data.sections.map((section) => section.id));
-    currentPageIndex.value = 0;
+    const pageIndex = selectedSectionId.value
+      ? readerPages.value.findIndex((page) => page.sectionIds.includes(selectedSectionId.value as string))
+      : -1;
+    currentPageIndex.value = pageIndex >= 0 ? pageIndex : 0;
   } catch (loadError) {
     error.value = loadError instanceof Error ? loadError.message : "Failed to load document";
     if (error.value.toLowerCase().includes("authentication required")) {
@@ -520,6 +529,11 @@ async function loadDocument() {
     }
   } finally {
     isLoadingDocument.value = false;
+    const requestedSectionId = typeof route.query.section === "string" ? route.query.section : null;
+    if (requestedSectionId && requestedSectionId === selectedSectionId.value) {
+      await nextTick();
+      document.getElementById(`compare-section-${requestedSectionId}`)?.scrollIntoView({ block: "start" });
+    }
   }
 }
 
@@ -558,6 +572,7 @@ async function handleSelectSection(sectionId: string) {
   if (pageIndex >= 0) {
     currentPageIndex.value = pageIndex;
   }
+  await router.replace({ query: { ...route.query, section: sectionId } });
   await nextTick();
   document.getElementById(`compare-section-${sectionId}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
@@ -579,6 +594,26 @@ watch(
   () => {
     selectedSectionId.value = null;
     void loadDocument();
+  },
+);
+
+watch(
+  () => route.query.section,
+  async (sectionId) => {
+    if (
+      typeof sectionId !== "string"
+      || sectionId === selectedSectionId.value
+      || !documentData.value?.sections.some((section) => section.id === sectionId)
+    ) {
+      return;
+    }
+    selectedSectionId.value = sectionId;
+    const pageIndex = readerPages.value.findIndex((page) => page.sectionIds.includes(sectionId));
+    if (pageIndex >= 0) {
+      currentPageIndex.value = pageIndex;
+    }
+    await nextTick();
+    document.getElementById(`compare-section-${sectionId}`)?.scrollIntoView({ block: "start" });
   },
 );
 

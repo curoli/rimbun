@@ -10,16 +10,24 @@ const props = defineProps<{
 }>();
 
 const editTarget = computed(() => (props.sectionId ? `/sections/${props.sectionId}/edit` : null));
+const readerTarget = computed(() => ({
+  path: `/documents/${props.documentRef}`,
+  query: props.sectionId ? { section: props.sectionId } : {},
+}));
+const commentsTarget = computed(() => ({
+  path: `/documents/${props.documentRef}/comments`,
+  query: props.sectionId ? { section: props.sectionId } : {},
+}));
 </script>
 
 <template>
   <nav class="view-nav" :aria-label="$t('Document views')">
-    <RouterLink :class="{ active: activeView === 'reader' }" :to="`/documents/${documentRef}`">
+    <RouterLink :class="{ active: activeView === 'reader' }" :to="readerTarget">
       {{ $t("Read") }}
     </RouterLink>
     <RouterLink
       :class="{ active: activeView === 'comments' }"
-      :to="`/documents/${documentRef}/comments`"
+      :to="commentsTarget"
     >
       {{ $t("Comments") }}
     </RouterLink>
