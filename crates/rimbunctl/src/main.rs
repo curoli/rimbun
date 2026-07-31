@@ -41,6 +41,7 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum CommandKind {
     ListProfiles,
+    Status,
     ListUsers,
     ExportContributions {
         username: String,
@@ -230,6 +231,33 @@ struct Paths {
 #[derive(Debug)]
 struct ServicePids {
     service_pid: i32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OverallStatus {
+    Healthy,
+    Degraded,
+    Stopped,
+}
+
+impl OverallStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Healthy => "healthy",
+            Self::Degraded => "degraded",
+            Self::Stopped => "stopped",
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ServiceStatusReport {
+    service: ServiceName,
+    process: &'static str,
+    pid: Option<i32>,
+    readiness: &'static str,
+    endpoint: String,
+    log_path: PathBuf,
 }
 
 fn repo_root() -> Result<PathBuf> {
@@ -695,10 +723,10 @@ fn print_profile_endpoints(profile: &ResolvedProfile) {
     eprintln!("\n=== profile endpoints ===");
     eprintln!("profile: {}", profile.profile_name);
 
-    if let Some(port) = expected_service_port(profile, ServiceName::Frontend) {
-        if let Some(url) = frontend_url(profile) {
-            eprintln!("frontend:  {url} (port {port})");
-        }
+    if let Some(port) = expected_service_port(profile, ServiceName::Frontend)
+        && let Some(url) = frontend_url(profile)
+    {
+        eprintln!("frontend:  {url} (port {port})");
     }
     if let Some(port) = expected_service_port(profile, ServiceName::Backend) {
         eprintln!("backend:   http://127.0.0.1:{port} (port {port})");
@@ -709,6 +737,224 @@ fn print_profile_endpoints(profile: &ResolvedProfile) {
     if let Some(db_name) = profile.vars.get("db_name") {
         eprintln!("database:  {db_name}");
     }
+}
+
+fn service_endpoint(profile: &ResolvedProfile, service: ServiceName) -> String {
+    match service {
+        ServiceName::Db => profile
+            .vars
+            .get("db_name")
+            .cloned()
+            .unwrap_or_else(|| "-".to_owned()),
+        ServiceName::Frontend => expected_service_port(profile, service)
+            .map(|port| format!("http://127.0.0.1:{port}/"))
+            .unwrap_or_else(|| "-".to_owned()),
+        ServiceName::Backend | ServiceName::Embedding => expected_service_port(profile, service)
+            .map(|port| format!("http://127.0.0.1:{port}"))
+            .unwrap_or_else(|| "-".to_owned()),
+    }
+}
+
+fn collect_service_status(
+    paths: &Paths,
+    profile: &ResolvedProfile,
+    service: ServiceName,
+) -> ServiceStatusReport {
+    let (process, pid) = match read_pids(paths, service) {
+        Ok(Some(pids)) if pid_running(pids.service_pid) => ("running", Some(pids.service_pid)),
+        Ok(Some(pids)) => ("stopped", Some(pids.service_pid)),
+        Ok(None) => ("stopped", None),
+        Err(_) => ("error", None),
+    };
+    let readiness = match service_ready(paths, profile, service) {
+        Ok(true) => "ready",
+        Ok(false) => "not-ready",
+        Err(_) => "error",
+    };
+
+    ServiceStatusReport {
+        service,
+        process,
+        pid,
+        readiness,
+        endpoint: service_endpoint(profile, service),
+        log_path: log_path(paths, service),
+    }
+}
+
+fn classify_status(reports: &[ServiceStatusReport], migrations_healthy: bool) -> OverallStatus {
+    if reports.is_empty() {
+        OverallStatus::Stopped
+    } else if reports
+        .iter()
+        .all(|report| report.process == "running" && report.readiness == "ready")
+        && migrations_healthy
+    {
+        OverallStatus::Healthy
+    } else if reports
+        .iter()
+        .all(|report| report.process == "stopped" && report.readiness == "not-ready")
+    {
+        OverallStatus::Stopped
+    } else {
+        OverallStatus::Degraded
+    }
+}
+
+fn local_migration_versions(paths: &Paths) -> Result<BTreeSet<i64>> {
+    let mut versions = BTreeSet::new();
+    for entry in fs::read_dir(paths.repo_root.join("migrations"))? {
+        let entry = entry?;
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+        if entry.path().extension().and_then(|value| value.to_str()) != Some("sql") {
+            continue;
+        }
+        let Some(version) = file_name.split('_').next() else {
+            continue;
+        };
+        versions.insert(
+            version
+                .parse()
+                .with_context(|| format!("invalid migration file name '{file_name}'"))?,
+        );
+    }
+    Ok(versions)
+}
+
+fn migration_status(paths: &Paths, profile: &ResolvedProfile) -> (String, bool) {
+    if !profile.services.contains_key(&ServiceName::Db) {
+        return ("not checked (external database)".to_owned(), true);
+    }
+    let Some(db_name) = profile.vars.get("db_name") else {
+        return ("unknown (database name missing)".to_owned(), false);
+    };
+    let Ok(local) = local_migration_versions(paths) else {
+        return ("unknown (cannot read local migrations)".to_owned(), false);
+    };
+    let query = "SELECT version || ':' || success FROM _sqlx_migrations ORDER BY version";
+    let command = format!(
+        "docker compose exec -T postgres psql -U postgres -d {} -tAc {}",
+        shell_quote(db_name),
+        shell_quote(query)
+    );
+    let Ok(output) = shell_command(&command, &paths.repo_root, &profile.env).output() else {
+        return ("unknown (migration query failed)".to_owned(), false);
+    };
+    if !output.status.success() {
+        return ("unknown (migration query failed)".to_owned(), false);
+    }
+
+    let mut applied = BTreeSet::new();
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let Some((version, success)) = line.trim().split_once(':') else {
+            return ("unknown (unexpected migration data)".to_owned(), false);
+        };
+        if success != "true" && success != "t" {
+            return (format!("failed migration {version}"), false);
+        }
+        let Ok(version) = version.parse() else {
+            return ("unknown (unexpected migration data)".to_owned(), false);
+        };
+        applied.insert(version);
+    }
+
+    if applied == local {
+        (format!("current ({} applied)", applied.len()), true)
+    } else if applied.is_subset(&local) {
+        (
+            format!("{} pending", local.difference(&applied).count()),
+            false,
+        )
+    } else {
+        ("diverged from local migrations".to_owned(), false)
+    }
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const KIB: u64 = 1024;
+    const MIB: u64 = KIB * 1024;
+    const GIB: u64 = MIB * 1024;
+    if bytes >= GIB {
+        format!("{:.1} GiB", bytes as f64 / GIB as f64)
+    } else if bytes >= MIB {
+        format!("{:.1} MiB", bytes as f64 / MIB as f64)
+    } else if bytes >= KIB {
+        format!("{:.1} KiB", bytes as f64 / KIB as f64)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+fn latest_backup(paths: &Paths) -> String {
+    let Ok(entries) = fs::read_dir(&paths.backup_dir) else {
+        return "none".to_owned();
+    };
+    let latest = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            if entry.path().extension().and_then(|value| value.to_str()) != Some("sql") {
+                return None;
+            }
+            let metadata = entry.metadata().ok()?;
+            if !metadata.is_file() {
+                return None;
+            }
+            Some((metadata.modified().ok()?, entry, metadata.len()))
+        })
+        .max_by_key(|(modified, _, _)| *modified);
+
+    let Some((modified, entry, size)) = latest else {
+        return "none".to_owned();
+    };
+    let modified = chrono::DateTime::<Utc>::from(modified)
+        .format("%Y-%m-%d %H:%M:%S UTC")
+        .to_string();
+    format!(
+        "{} ({}, {modified}, unverified)",
+        entry.file_name().to_string_lossy(),
+        format_bytes(size)
+    )
+}
+
+fn show_status(paths: &Paths, profile: &ResolvedProfile) -> OverallStatus {
+    let reports = SERVICE_ORDER
+        .iter()
+        .copied()
+        .filter(|service| profile.services.contains_key(service))
+        .map(|service| collect_service_status(paths, profile, service))
+        .collect::<Vec<_>>();
+    let (migrations, migrations_healthy) = migration_status(paths, profile);
+    let overall = classify_status(&reports, migrations_healthy);
+
+    println!("Profile: {}", profile.profile_name);
+    println!("State:   {}", paths.state_dir.display());
+    println!();
+    println!(
+        "{:<10} {:<9} {:<10} {:<8} Endpoint",
+        "Service", "Process", "Readiness", "PID"
+    );
+    for report in &reports {
+        let pid = report
+            .pid
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "-".to_owned());
+        println!(
+            "{:<10} {:<9} {:<10} {:<8} {}",
+            report.service.as_str(),
+            report.process,
+            report.readiness,
+            pid,
+            report.endpoint
+        );
+        println!("           log: {}", report.log_path.display());
+    }
+    println!();
+    println!("Migrations: {migrations}");
+    println!("Latest backup: {}", latest_backup(paths));
+    println!("Overall: {}", overall.as_str());
+
+    overall
 }
 
 fn local_port_in_use(port: u16) -> Result<bool> {
@@ -975,10 +1221,10 @@ fn wait_for_pid_exit(pid: i32, timeout: Duration) {
     }
 }
 
-fn service_config<'a>(
-    profile: &'a ResolvedProfile,
+fn service_config(
+    profile: &ResolvedProfile,
     service: ServiceName,
-) -> Result<&'a ResolvedServiceConfig> {
+) -> Result<&ResolvedServiceConfig> {
     profile.services.get(&service).ok_or_else(|| {
         anyhow!(
             "service '{}' missing from resolved profile",
@@ -1057,30 +1303,29 @@ fn start_service(
         profile.profile_name
     );
 
-    if let Some(port) = expected_service_port(profile, service) {
-        if local_port_in_use(port)? {
-            let conflicting_profiles =
-                profiles_using_service_port(registry, profile, service, port);
-            let profile_hint = if conflicting_profiles.is_empty() {
-                String::new()
-            } else {
-                format!(
-                    "\n\nLikely conflicting profile(s): {}",
-                    conflicting_profiles.join(", ")
-                )
-            };
-            let details = port_usage_details(port)
-                .map(|output| format!("\n\nPort usage:\n{output}"))
-                .unwrap_or_default();
-            bail!(
-                "cannot start '{}' for profile '{}': port {} is already in use{}{}",
-                service.as_str(),
-                profile.profile_name,
-                port,
-                profile_hint,
-                details
-            );
-        }
+    if let Some(port) = expected_service_port(profile, service)
+        && local_port_in_use(port)?
+    {
+        let conflicting_profiles = profiles_using_service_port(registry, profile, service, port);
+        let profile_hint = if conflicting_profiles.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "\n\nLikely conflicting profile(s): {}",
+                conflicting_profiles.join(", ")
+            )
+        };
+        let details = port_usage_details(port)
+            .map(|output| format!("\n\nPort usage:\n{output}"))
+            .unwrap_or_default();
+        bail!(
+            "cannot start '{}' for profile '{}': port {} is already in use{}{}",
+            service.as_str(),
+            profile.profile_name,
+            port,
+            profile_hint,
+            details
+        );
     }
 
     let config = service_config(profile, service)?;
@@ -1410,7 +1655,7 @@ fn restore_backup(
     Ok(())
 }
 
-fn run() -> Result<()> {
+fn run() -> Result<ExitCode> {
     let repo_root = repo_root()?;
     let registry = load_registry(&repo_root)?;
 
@@ -1418,7 +1663,7 @@ fn run() -> Result<()> {
 
     if matches!(cli.command, CommandKind::ListProfiles) {
         list_profiles(&registry);
-        return Ok(());
+        return Ok(ExitCode::SUCCESS);
     }
 
     let profile_name = cli
@@ -1432,7 +1677,15 @@ fn run() -> Result<()> {
     match cli.command {
         CommandKind::ListProfiles => {
             list_profiles(&registry);
-            return Ok(());
+            return Ok(ExitCode::SUCCESS);
+        }
+        CommandKind::Status => {
+            let status = show_status(&paths, &profile);
+            return Ok(if status == OverallStatus::Healthy {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(1)
+            });
         }
         CommandKind::ListUsers => list_users(&paths, &profile)?,
         CommandKind::ExportContributions { username, file } => {
@@ -1486,12 +1739,12 @@ fn run() -> Result<()> {
         CommandKind::SetRole { username, role } => set_role(&paths, &profile, &username, &role)?,
     }
 
-    Ok(())
+    Ok(ExitCode::SUCCESS)
 }
 
 fn main() -> ExitCode {
     match run() {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(code) => code,
         Err(error) => {
             eprintln!("\n=== rimbunctl failed ===");
             eprintln!("{error:#}");
@@ -1534,5 +1787,46 @@ mod tests {
 
         assert!(!http_service_ready(port, "/health"));
         server.join().expect("join test server");
+    }
+
+    fn status_report(process: &'static str, readiness: &'static str) -> ServiceStatusReport {
+        ServiceStatusReport {
+            service: ServiceName::Backend,
+            process,
+            pid: None,
+            readiness,
+            endpoint: String::new(),
+            log_path: PathBuf::new(),
+        }
+    }
+
+    #[test]
+    fn status_is_healthy_only_when_every_service_and_migrations_are_ready() {
+        let reports = vec![
+            status_report("running", "ready"),
+            status_report("running", "ready"),
+        ];
+
+        assert_eq!(classify_status(&reports, true), OverallStatus::Healthy);
+        assert_eq!(classify_status(&reports, false), OverallStatus::Degraded);
+    }
+
+    #[test]
+    fn status_distinguishes_stopped_from_degraded() {
+        let stopped = vec![status_report("stopped", "not-ready")];
+        let orphaned = vec![status_report("stopped", "ready")];
+
+        assert_eq!(classify_status(&[], true), OverallStatus::Stopped);
+        assert_eq!(classify_status(&stopped, false), OverallStatus::Stopped);
+        assert_eq!(classify_status(&orphaned, true), OverallStatus::Degraded);
+    }
+
+    #[test]
+    fn status_command_accepts_a_profile() {
+        let cli =
+            Cli::try_parse_from(["rimbunctl", "dev", "status"]).expect("parse status command");
+
+        assert_eq!(cli.profile.as_deref(), Some("dev"));
+        assert!(matches!(cli.command, CommandKind::Status));
     }
 }

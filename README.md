@@ -135,6 +135,7 @@ Available commands:
 ./rimbunctl dev start [service]
 ./rimbunctl dev stop [service]
 ./rimbunctl dev restart [service]
+./rimbunctl dev status
 ./rimbunctl dev log [service] [--follow]
 ./rimbunctl dev list-profiles
 ./rimbunctl dev backup [name]
@@ -162,12 +163,13 @@ Examples:
 ```bash
 ./rimbunctl dev start
 ./rimbunctl dev restart backend
+./rimbunctl dev status
 ./rimbunctl dev log frontend --follow
 ./rimbunctl dev log all
 ./rimbunctl dev list-profiles
 ./rimbunctl dev backup before-upgrade
 ./rimbunctl dev restore 20260614-120000-before-upgrade.sql
-./rimbunctl dev set-role curoli privileged
+./rimbunctl dev set-role curoli admin
 ./rimbunctl dev set-password curoli 'new secure password'
 ```
 
@@ -175,6 +177,9 @@ Examples:
 For `start` and `restart`, it waits until every requested service actually responds before
 reporting success. Longer starts print periodic progress updates; the readiness timeout is five
 minutes, which also covers backend recompilation in development.
+`status` reports each configured process and readiness probe, endpoints, PIDs, log paths,
+migration state, the latest backup, and an overall `healthy`, `degraded`, or `stopped` state.
+It exits successfully only when the profile is healthy, so it can also be used in scripts.
 
 It now supports reusable `fragments` and concrete `profiles`.
 
