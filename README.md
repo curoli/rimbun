@@ -139,6 +139,7 @@ Available commands:
 ./rimbunctl dev log [service] [--follow]
 ./rimbunctl dev list-profiles
 ./rimbunctl dev backup [name]
+./rimbunctl dev verify-backup <backup-file>
 ./rimbunctl dev restore <backup-file>
 ./rimbunctl dev set-role <username> <role>
 ./rimbunctl dev set-password <username> <new-password>
@@ -155,6 +156,7 @@ Supported services:
 Runtime state is written under `.rimbun/dev/`:
 
 - backups: `.rimbun/dev/backups/*.sql`
+- backup metadata and checksums: `.rimbun/dev/backups/*.sql.json`
 - logs: `.rimbun/dev/logs/*.log`
 - pids: `.rimbun/dev/pids/*.pid`
 
@@ -168,6 +170,7 @@ Examples:
 ./rimbunctl dev log all
 ./rimbunctl dev list-profiles
 ./rimbunctl dev backup before-upgrade
+./rimbunctl dev verify-backup 20260614-120000-before-upgrade.sql
 ./rimbunctl dev restore 20260614-120000-before-upgrade.sql
 ./rimbunctl dev set-role curoli admin
 ./rimbunctl dev set-password curoli 'new secure password'
@@ -180,6 +183,11 @@ minutes, which also covers backend recompilation in development.
 `status` reports each configured process and readiness probe, endpoints, PIDs, log paths,
 migration state, the latest backup, and an overall `healthy`, `degraded`, or `stopped` state.
 It exits successfully only when the profile is healthy, so it can also be used in scripts.
+`backup` records a SHA-256 checksum and verifies restorability by loading the dump into a temporary
+database. The temporary database is removed afterward. `restore` validates this metadata before
+touching the target database. Legacy backups without metadata remain restorable with a warning;
+use `verify-backup` to add metadata and verify them first. Restoring a backup created for another
+profile requires the explicit `--allow-profile-mismatch` option.
 
 It now supports reusable `fragments` and concrete `profiles`.
 
@@ -203,6 +211,7 @@ stop = "docker compose stop postgres >/dev/null"
 [fragments.local-docker.database]
 backup = "docker compose exec -T postgres pg_dump -U postgres -d {db_name} > {file}"
 restore = "docker compose exec -T postgres psql -U postgres -d {db_name} < {file}"
+verify = "set -e; cleanup() { docker compose exec -T postgres dropdb -U postgres --if-exists {verification_db} >/dev/null; }; trap cleanup EXIT; docker compose exec -T postgres createdb -U postgres {verification_db}; docker compose exec -T postgres psql -U postgres -d {verification_db} -v ON_ERROR_STOP=1 < {file} >/dev/null; test \"$(docker compose exec -T postgres psql -U postgres -d {verification_db} -tAc \"SELECT count(*) FROM pg_class WHERE relkind = 'r' AND relname IN ('users', 'documents', '_sqlx_migrations')\")\" = \"3\""
 
 [fragments.project_demo]
 vars.db_name = "rimbun_demo"
@@ -241,7 +250,10 @@ vars.frontend_port = "5174"
 vars.embedding_port = "8002"
 ```
 
-The special placeholder `{file}` is replaced by the target backup path. For restores, use either a file name relative to `.rimbun/<state_namespace>/backups/` or an absolute path.
+The special placeholder `{file}` is replaced by the target backup path. A database verification
+command also receives a unique `{verification_db}` name and must remove that temporary database
+even when verification fails. For restores, use either a file name relative to
+`.rimbun/<state_namespace>/backups/` or an absolute path.
 
 This repository also contains a concrete [rimbunctl.toml](./rimbunctl.toml) with nine predefined project profiles:
 

@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     env, fs,
-    io::{BufRead, BufReader, ErrorKind, Write},
+    io::{BufRead, BufReader, ErrorKind, Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
     os::unix::process::CommandExt,
     path::{Path, PathBuf},
@@ -18,7 +18,8 @@ use nix::{
     sys::signal::{Signal, kill, killpg},
     unistd::Pid,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 const SERVICE_ORDER: [ServiceName; 4] = [
     ServiceName::Db,
@@ -74,8 +75,13 @@ enum CommandKind {
     Backup {
         name: Option<String>,
     },
+    VerifyBackup {
+        backup: String,
+    },
     Restore {
         backup: String,
+        #[arg(long)]
+        allow_profile_mismatch: bool,
     },
     SetRole {
         username: String,
@@ -186,6 +192,7 @@ struct ServiceConfig {
 struct DatabaseConfig {
     backup: Option<String>,
     restore: Option<String>,
+    verify: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -211,6 +218,7 @@ struct ResolvedServiceConfig {
 struct ResolvedDatabaseConfig {
     backup: String,
     restore: String,
+    verify: Option<String>,
 }
 
 #[derive(Debug)]
@@ -231,6 +239,23 @@ struct Paths {
 #[derive(Debug)]
 struct ServicePids {
     service_pid: i32,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct BackupMetadata {
+    format_version: u32,
+    profile: String,
+    database: String,
+    created_at: String,
+    size_bytes: u64,
+    sha256: String,
+    verification: BackupVerification,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct BackupVerification {
+    status: String,
+    verified_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -312,6 +337,10 @@ fn builtin_registry() -> ConfigRegistry {
                 ),
                 restore: Some(
                     "docker compose exec -T postgres psql -U postgres -d {db_name} < {file}"
+                        .to_owned(),
+                ),
+                verify: Some(
+                    "set -e; cleanup() { docker compose exec -T postgres dropdb -U postgres --if-exists {verification_db} >/dev/null; }; trap cleanup EXIT; docker compose exec -T postgres createdb -U postgres {verification_db}; docker compose exec -T postgres psql -U postgres -d {verification_db} -v ON_ERROR_STOP=1 < {file} >/dev/null; test \"$(docker compose exec -T postgres psql -U postgres -d {verification_db} -tAc \"SELECT count(*) FROM pg_class WHERE relkind = 'r' AND relname IN ('users', 'documents', '_sqlx_migrations')\")\" = \"3\""
                         .to_owned(),
                 ),
             }),
@@ -447,6 +476,9 @@ fn merge_database(base: &mut DatabaseConfig, overlay: &DatabaseConfig) {
     }
     if let Some(restore) = &overlay.restore {
         base.restore = Some(restore.clone());
+    }
+    if let Some(verify) = &overlay.verify {
+        base.verify = Some(verify.clone());
     }
 }
 
@@ -636,6 +668,9 @@ fn resolve_profile(registry: &ConfigRegistry, profile_name: &str) -> Result<Reso
                         .ok_or_else(|| anyhow!("database restore command is required"))?,
                     &vars,
                 ),
+                verify: database
+                    .verify
+                    .map(|command| interpolate_template(&command, &vars)),
             })
         })
         .transpose()?;
@@ -886,9 +921,75 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
-fn latest_backup(paths: &Paths) -> String {
+fn backup_metadata_path(backup_path: &Path) -> PathBuf {
+    let mut file_name = backup_path.file_name().unwrap_or_default().to_os_string();
+    file_name.push(".json");
+    backup_path.with_file_name(file_name)
+}
+
+fn sha256_file(path: &Path) -> Result<String> {
+    let mut file = fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn read_backup_metadata(backup_path: &Path) -> Result<Option<BackupMetadata>> {
+    let path = backup_metadata_path(backup_path);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let raw = fs::read_to_string(&path)
+        .with_context(|| format!("failed to read backup metadata {}", path.display()))?;
+    serde_json::from_str(&raw)
+        .with_context(|| format!("failed to parse backup metadata {}", path.display()))
+        .map(Some)
+}
+
+fn write_backup_metadata(backup_path: &Path, metadata: &BackupMetadata) -> Result<()> {
+    let path = backup_metadata_path(backup_path);
+    let temporary = path.with_extension("json.tmp");
+    let mut raw = serde_json::to_string_pretty(metadata)?;
+    raw.push('\n');
+    fs::write(&temporary, raw)?;
+    fs::rename(&temporary, &path)?;
+    Ok(())
+}
+
+fn backup_verification_label(backup_path: &Path) -> String {
+    let metadata = match read_backup_metadata(backup_path) {
+        Ok(Some(metadata)) => metadata,
+        Ok(None) => return "unverified (no metadata)".to_owned(),
+        Err(_) => return "invalid metadata".to_owned(),
+    };
+    let checksum = match sha256_file(backup_path) {
+        Ok(checksum) => checksum,
+        Err(_) => return "unreadable".to_owned(),
+    };
+    if checksum != metadata.sha256 {
+        return "CORRUPT (checksum mismatch)".to_owned();
+    }
+    if metadata.verification.status == "verified" {
+        metadata
+            .verification
+            .verified_at
+            .map(|value| format!("verified {value}"))
+            .unwrap_or_else(|| "verified".to_owned())
+    } else {
+        metadata.verification.status
+    }
+}
+
+fn latest_backup(paths: &Paths) -> (String, bool) {
     let Ok(entries) = fs::read_dir(&paths.backup_dir) else {
-        return "none".to_owned();
+        return ("none".to_owned(), true);
     };
     let latest = entries
         .filter_map(Result::ok)
@@ -905,15 +1006,20 @@ fn latest_backup(paths: &Paths) -> String {
         .max_by_key(|(modified, _, _)| *modified);
 
     let Some((modified, entry, size)) = latest else {
-        return "none".to_owned();
+        return ("none".to_owned(), true);
     };
     let modified = chrono::DateTime::<Utc>::from(modified)
         .format("%Y-%m-%d %H:%M:%S UTC")
         .to_string();
-    format!(
-        "{} ({}, {modified}, unverified)",
-        entry.file_name().to_string_lossy(),
-        format_bytes(size)
+    let verification = backup_verification_label(&entry.path());
+    let healthy = verification.starts_with("verified");
+    (
+        format!(
+            "{} ({}, {modified}, {verification})",
+            entry.file_name().to_string_lossy(),
+            format_bytes(size),
+        ),
+        healthy,
     )
 }
 
@@ -925,7 +1031,8 @@ fn show_status(paths: &Paths, profile: &ResolvedProfile) -> OverallStatus {
         .map(|service| collect_service_status(paths, profile, service))
         .collect::<Vec<_>>();
     let (migrations, migrations_healthy) = migration_status(paths, profile);
-    let overall = classify_status(&reports, migrations_healthy);
+    let (latest_backup, backup_healthy) = latest_backup(paths);
+    let overall = classify_status(&reports, migrations_healthy && backup_healthy);
 
     println!("Profile: {}", profile.profile_name);
     println!("State:   {}", paths.state_dir.display());
@@ -951,7 +1058,7 @@ fn show_status(paths: &Paths, profile: &ResolvedProfile) -> OverallStatus {
     }
     println!();
     println!("Migrations: {migrations}");
-    println!("Latest backup: {}", latest_backup(paths));
+    println!("Latest backup: {latest_backup}");
     println!("Overall: {}", overall.as_str());
 
     overall
@@ -1598,6 +1705,107 @@ fn sanitize_backup_name(name: &str) -> String {
     sanitized.trim_matches('_').to_owned()
 }
 
+fn verification_database_name(profile: &ResolvedProfile) -> String {
+    let base = profile
+        .vars
+        .get("db_name")
+        .map(String::as_str)
+        .unwrap_or("rimbun");
+    let nonce = Utc::now().timestamp_micros().unsigned_abs();
+    let suffix = format!("_verify_{nonce}");
+    let maximum_base_length = 63_usize.saturating_sub(suffix.len());
+    let base = base
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric() || *character == '_')
+        .take(maximum_base_length)
+        .collect::<String>();
+    format!("{base}{suffix}")
+}
+
+fn backup_created_at(backup_path: &Path) -> String {
+    fs::metadata(backup_path)
+        .and_then(|metadata| metadata.modified())
+        .map(chrono::DateTime::<Utc>::from)
+        .unwrap_or_else(|_| Utc::now())
+        .to_rfc3339()
+}
+
+fn new_backup_metadata(profile: &ResolvedProfile, backup_path: &Path) -> Result<BackupMetadata> {
+    Ok(BackupMetadata {
+        format_version: 1,
+        profile: profile.profile_name.clone(),
+        database: profile.vars.get("db_name").cloned().unwrap_or_default(),
+        created_at: backup_created_at(backup_path),
+        size_bytes: fs::metadata(backup_path)?.len(),
+        sha256: sha256_file(backup_path)?,
+        verification: BackupVerification {
+            status: "pending".to_owned(),
+            verified_at: None,
+        },
+    })
+}
+
+fn verify_backup_file(paths: &Paths, profile: &ResolvedProfile, backup_path: &Path) -> Result<()> {
+    if !backup_path.exists() {
+        bail!("backup file '{}' not found", backup_path.display());
+    }
+    if fs::metadata(backup_path)?.len() == 0 {
+        bail!("backup file '{}' is empty", backup_path.display());
+    }
+
+    let database = database_config(profile)?;
+    let verify = database.verify.as_ref().ok_or_else(|| {
+        anyhow!(
+            "profile '{}' has no backup verification command",
+            profile.profile_name
+        )
+    })?;
+    let mut metadata = match read_backup_metadata(backup_path)? {
+        Some(metadata) => {
+            let checksum = sha256_file(backup_path)?;
+            if checksum != metadata.sha256 {
+                bail!(
+                    "backup '{}' does not match its recorded SHA-256 checksum",
+                    backup_path.display()
+                );
+            }
+            metadata
+        }
+        None => new_backup_metadata(profile, backup_path)?,
+    };
+    metadata.verification.status = "verifying".to_owned();
+    metadata.verification.verified_at = None;
+    write_backup_metadata(backup_path, &metadata)?;
+
+    let verification_database = verification_database_name(profile);
+    let command = verify
+        .replace("{file}", &shell_quote(&backup_path.display().to_string()))
+        .replace("{verification_db}", &shell_quote(&verification_database));
+    let verification_result = run_shell(&command, &paths.repo_root, &profile.env);
+    match verification_result {
+        Ok(()) => {
+            metadata.verification.status = "verified".to_owned();
+            metadata.verification.verified_at = Some(Utc::now().to_rfc3339());
+            write_backup_metadata(backup_path, &metadata)?;
+            println!(
+                "Verified backup {} (SHA-256 {})",
+                backup_path.display(),
+                metadata.sha256
+            );
+            Ok(())
+        }
+        Err(error) => {
+            metadata.verification.status = "failed".to_owned();
+            metadata.verification.verified_at = None;
+            write_backup_metadata(backup_path, &metadata)?;
+            Err(error).context(format!(
+                "backup verification failed for {}",
+                backup_path.display()
+            ))
+        }
+    }
+}
+
 fn create_backup(
     registry: &ConfigRegistry,
     paths: &Paths,
@@ -1620,7 +1828,9 @@ fn create_backup(
 
     run_shell(&command, &paths.repo_root, &profile.env)?;
     println!("Created backup {}", backup_path.display());
-    Ok(())
+    let metadata = new_backup_metadata(profile, &backup_path)?;
+    write_backup_metadata(&backup_path, &metadata)?;
+    verify_backup_file(paths, profile, &backup_path)
 }
 
 fn resolve_backup_path(paths: &Paths, backup: &str) -> PathBuf {
@@ -1637,6 +1847,7 @@ fn restore_backup(
     paths: &Paths,
     profile: &ResolvedProfile,
     backup: &str,
+    allow_profile_mismatch: bool,
 ) -> Result<()> {
     ensure_restore_safe(paths)?;
     ensure_db_running(registry, paths, profile)?;
@@ -1644,6 +1855,36 @@ fn restore_backup(
     let backup_path = resolve_backup_path(paths, backup);
     if !backup_path.exists() {
         bail!("backup file '{}' not found", backup_path.display());
+    }
+
+    match read_backup_metadata(&backup_path)? {
+        Some(metadata) => {
+            let checksum = sha256_file(&backup_path)?;
+            if checksum != metadata.sha256 {
+                bail!(
+                    "refusing to restore '{}': SHA-256 checksum mismatch",
+                    backup_path.display()
+                );
+            }
+            if metadata.verification.status != "verified" {
+                bail!(
+                    "refusing to restore '{}': verification status is '{}'; run verify-backup first",
+                    backup_path.display(),
+                    metadata.verification.status
+                );
+            }
+            if metadata.profile != profile.profile_name && !allow_profile_mismatch {
+                bail!(
+                    "backup belongs to profile '{}', not '{}'; pass --allow-profile-mismatch to restore it intentionally",
+                    metadata.profile,
+                    profile.profile_name
+                );
+            }
+        }
+        None => eprintln!(
+            "WARNING: restoring legacy backup without checksum or restore verification: {}",
+            backup_path.display()
+        ),
     }
 
     let database = database_config(profile)?;
@@ -1731,7 +1972,14 @@ fn run() -> Result<ExitCode> {
         CommandKind::Backup { name } => {
             create_backup(&registry, &paths, &profile, name.as_deref())?
         }
-        CommandKind::Restore { backup } => restore_backup(&registry, &paths, &profile, &backup)?,
+        CommandKind::VerifyBackup { backup } => {
+            ensure_db_running(&registry, &paths, &profile)?;
+            verify_backup_file(&paths, &profile, &resolve_backup_path(&paths, &backup))?
+        }
+        CommandKind::Restore {
+            backup,
+            allow_profile_mismatch,
+        } => restore_backup(&registry, &paths, &profile, &backup, allow_profile_mismatch)?,
         CommandKind::SetPassword {
             username,
             new_password,
@@ -1828,5 +2076,68 @@ mod tests {
 
         assert_eq!(cli.profile.as_deref(), Some("dev"));
         assert!(matches!(cli.command, CommandKind::Status));
+    }
+
+    #[test]
+    fn verify_backup_command_accepts_a_profile_and_file() {
+        let cli = Cli::try_parse_from(["rimbunctl", "dev", "verify-backup", "backup.sql"])
+            .expect("parse verify-backup command");
+
+        assert!(matches!(
+            cli.command,
+            CommandKind::VerifyBackup { backup } if backup == "backup.sql"
+        ));
+    }
+
+    #[test]
+    fn sha256_file_hashes_backup_contents() {
+        let path = std::env::temp_dir().join(format!(
+            "rimbunctl-sha256-{}-{}.sql",
+            std::process::id(),
+            Utc::now().timestamp_micros()
+        ));
+        fs::write(&path, b"abc").expect("write test backup");
+
+        let checksum = sha256_file(&path).expect("hash test backup");
+
+        assert_eq!(
+            checksum,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        fs::remove_file(path).expect("remove test backup");
+    }
+
+    #[test]
+    fn backup_metadata_detects_changes_after_verification() {
+        let directory = std::env::temp_dir().join(format!(
+            "rimbunctl-metadata-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_micros()
+        ));
+        fs::create_dir_all(&directory).expect("create test backup directory");
+        let backup_path = directory.join("backup.sql");
+        fs::write(&backup_path, b"valid backup").expect("write test backup");
+        let metadata = BackupMetadata {
+            format_version: 1,
+            profile: "dev".to_owned(),
+            database: "rimbun_dev".to_owned(),
+            created_at: Utc::now().to_rfc3339(),
+            size_bytes: 12,
+            sha256: sha256_file(&backup_path).expect("hash test backup"),
+            verification: BackupVerification {
+                status: "verified".to_owned(),
+                verified_at: Some(Utc::now().to_rfc3339()),
+            },
+        };
+        write_backup_metadata(&backup_path, &metadata).expect("write test metadata");
+
+        assert!(backup_verification_label(&backup_path).starts_with("verified"));
+        fs::write(&backup_path, b"modified backup").expect("modify test backup");
+        assert_eq!(
+            backup_verification_label(&backup_path),
+            "CORRUPT (checksum mismatch)"
+        );
+
+        fs::remove_dir_all(directory).expect("remove test backup directory");
     }
 }
