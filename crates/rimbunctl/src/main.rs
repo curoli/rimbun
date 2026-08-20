@@ -43,6 +43,7 @@ struct Cli {
 enum CommandKind {
     ListProfiles,
     Status,
+    Check,
     ListUsers,
     ExportContributions {
         username: String,
@@ -283,6 +284,20 @@ struct ServiceStatusReport {
     readiness: &'static str,
     endpoint: String,
     log_path: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CheckOutcome {
+    Pass,
+    Fail,
+    Skip,
+}
+
+#[derive(Debug)]
+struct CheckResult {
+    name: String,
+    outcome: CheckOutcome,
+    detail: String,
 }
 
 fn repo_root() -> Result<PathBuf> {
@@ -1062,6 +1077,441 @@ fn show_status(paths: &Paths, profile: &ResolvedProfile) -> OverallStatus {
     println!("Overall: {}", overall.as_str());
 
     overall
+}
+
+fn check_result(
+    results: &mut Vec<CheckResult>,
+    name: impl Into<String>,
+    outcome: CheckOutcome,
+    detail: impl Into<String>,
+) {
+    results.push(CheckResult {
+        name: name.into(),
+        outcome,
+        detail: detail.into(),
+    });
+}
+
+fn check_http_response(
+    client: &reqwest::blocking::Client,
+    url: &str,
+) -> Result<reqwest::blocking::Response> {
+    let response = client.get(url).send()?;
+    if !response.status().is_success() {
+        bail!("HTTP {}", response.status());
+    }
+    Ok(response)
+}
+
+fn check_api(
+    client: &reqwest::blocking::Client,
+    profile: &ResolvedProfile,
+    results: &mut Vec<CheckResult>,
+) {
+    let Some(backend_port) = expected_service_port(profile, ServiceName::Backend) else {
+        check_result(
+            results,
+            "backend API",
+            CheckOutcome::Fail,
+            "backend_port is not configured",
+        );
+        return;
+    };
+    let base_url = format!("http://127.0.0.1:{backend_port}");
+
+    match check_http_response(client, &format!("{base_url}/health")) {
+        Ok(response) => match response.text() {
+            Ok(body) if body.trim() == "ok" => check_result(
+                results,
+                "backend health",
+                CheckOutcome::Pass,
+                "/health returned ok",
+            ),
+            Ok(body) => check_result(
+                results,
+                "backend health",
+                CheckOutcome::Fail,
+                format!("unexpected response body: {body:?}"),
+            ),
+            Err(error) => check_result(
+                results,
+                "backend health",
+                CheckOutcome::Fail,
+                error.to_string(),
+            ),
+        },
+        Err(error) => check_result(
+            results,
+            "backend health",
+            CheckOutcome::Fail,
+            error.to_string(),
+        ),
+    }
+
+    let settings_url = format!("{base_url}/api/site-settings");
+    match check_http_response(client, &settings_url)
+        .and_then(|response| response.json::<serde_json::Value>().map_err(Into::into))
+    {
+        Ok(settings) if settings.is_object() => check_result(
+            results,
+            "site settings",
+            CheckOutcome::Pass,
+            "returned a JSON object",
+        ),
+        Ok(_) => check_result(
+            results,
+            "site settings",
+            CheckOutcome::Fail,
+            "response is not a JSON object",
+        ),
+        Err(error) => check_result(
+            results,
+            "site settings",
+            CheckOutcome::Fail,
+            error.to_string(),
+        ),
+    }
+
+    let documents_url = format!("{base_url}/api/documents");
+    let documents = match check_http_response(client, &documents_url)
+        .and_then(|response| response.json::<serde_json::Value>().map_err(Into::into))
+    {
+        Ok(documents) if documents.is_array() => {
+            let count = documents.as_array().map_or(0, Vec::len);
+            check_result(
+                results,
+                "document list",
+                CheckOutcome::Pass,
+                format!("returned {count} visible document(s)"),
+            );
+            documents
+        }
+        Ok(_) => {
+            check_result(
+                results,
+                "document list",
+                CheckOutcome::Fail,
+                "response is not a JSON array",
+            );
+            serde_json::Value::Null
+        }
+        Err(error) => {
+            check_result(
+                results,
+                "document list",
+                CheckOutcome::Fail,
+                error.to_string(),
+            );
+            serde_json::Value::Null
+        }
+    };
+
+    let first_document_id = documents
+        .as_array()
+        .and_then(|documents| documents.first())
+        .and_then(|document| document.get("id"))
+        .and_then(serde_json::Value::as_str);
+    if let Some(document_id) = first_document_id {
+        let detail_url = format!("{base_url}/api/documents/{document_id}");
+        match check_http_response(client, &detail_url)
+            .and_then(|response| response.json::<serde_json::Value>().map_err(Into::into))
+        {
+            Ok(detail)
+                if detail.get("document").is_some()
+                    && detail.get("sections").is_some_and(|value| value.is_array()) =>
+            {
+                check_result(
+                    results,
+                    "document detail",
+                    CheckOutcome::Pass,
+                    "returned document and sections",
+                )
+            }
+            Ok(_) => check_result(
+                results,
+                "document detail",
+                CheckOutcome::Fail,
+                "response is missing document or sections",
+            ),
+            Err(error) => check_result(
+                results,
+                "document detail",
+                CheckOutcome::Fail,
+                error.to_string(),
+            ),
+        }
+    } else if documents.is_array() {
+        check_result(
+            results,
+            "document detail",
+            CheckOutcome::Skip,
+            "no visible document available",
+        );
+    }
+
+    check_authentication(client, &base_url, results);
+}
+
+fn check_credential(name: &str) -> Option<String> {
+    env::var(name).ok().filter(|value| !value.is_empty())
+}
+
+fn check_authentication(
+    client: &reqwest::blocking::Client,
+    base_url: &str,
+    results: &mut Vec<CheckResult>,
+) {
+    let username = check_credential("RIMBUN_CHECK_USERNAME");
+    let password = check_credential("RIMBUN_CHECK_PASSWORD");
+    let (username, password) = match (username, password) {
+        (Some(username), Some(password)) => (username, password),
+        (username, password) => {
+            let outcome = if username.is_none() && password.is_none() {
+                CheckOutcome::Skip
+            } else {
+                CheckOutcome::Fail
+            };
+            let detail = if outcome == CheckOutcome::Skip {
+                "RIMBUN_CHECK_USERNAME and RIMBUN_CHECK_PASSWORD are not configured"
+            } else {
+                "both RIMBUN_CHECK_USERNAME and RIMBUN_CHECK_PASSWORD are required"
+            };
+            check_result(results, "authenticated API", outcome, detail);
+            return;
+        }
+    };
+
+    let login = client
+        .post(format!("{base_url}/api/auth/login"))
+        .json(&serde_json::json!({ "identifier": username, "password": password }))
+        .send();
+    let session_token = match login {
+        Ok(response) if response.status().is_success() => {
+            match response.json::<serde_json::Value>() {
+                Ok(body) => body
+                    .get("session_token")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned),
+                Err(error) => {
+                    check_result(
+                        results,
+                        "login",
+                        CheckOutcome::Fail,
+                        format!("invalid JSON response: {error}"),
+                    );
+                    None
+                }
+            }
+        }
+        Ok(response) => {
+            check_result(
+                results,
+                "login",
+                CheckOutcome::Fail,
+                format!("HTTP {}", response.status()),
+            );
+            None
+        }
+        Err(error) => {
+            check_result(results, "login", CheckOutcome::Fail, error.to_string());
+            None
+        }
+    };
+    let Some(session_token) = session_token else {
+        if !results.iter().any(|result| result.name == "login") {
+            check_result(
+                results,
+                "login",
+                CheckOutcome::Fail,
+                "response did not contain session_token",
+            );
+        }
+        return;
+    };
+    check_result(results, "login", CheckOutcome::Pass, "credentials accepted");
+
+    match client
+        .get(format!("{base_url}/api/me"))
+        .header("x-rimbun-session", &session_token)
+        .send()
+    {
+        Ok(response) if response.status().is_success() => check_result(
+            results,
+            "authenticated user",
+            CheckOutcome::Pass,
+            "/api/me accepted the session",
+        ),
+        Ok(response) => check_result(
+            results,
+            "authenticated user",
+            CheckOutcome::Fail,
+            format!("HTTP {}", response.status()),
+        ),
+        Err(error) => check_result(
+            results,
+            "authenticated user",
+            CheckOutcome::Fail,
+            error.to_string(),
+        ),
+    }
+
+    match client
+        .post(format!("{base_url}/api/auth/logout"))
+        .header("x-rimbun-session", &session_token)
+        .send()
+    {
+        Ok(response) if response.status().is_success() => check_result(
+            results,
+            "logout",
+            CheckOutcome::Pass,
+            "smoke-test session removed",
+        ),
+        Ok(response) => check_result(
+            results,
+            "logout",
+            CheckOutcome::Fail,
+            format!("HTTP {}", response.status()),
+        ),
+        Err(error) => check_result(results, "logout", CheckOutcome::Fail, error.to_string()),
+    }
+}
+
+fn run_checks(paths: &Paths, profile: &ResolvedProfile) -> bool {
+    let mut results = Vec::new();
+    for service in SERVICE_ORDER
+        .iter()
+        .copied()
+        .filter(|service| profile.services.contains_key(service))
+    {
+        let report = collect_service_status(paths, profile, service);
+        let healthy = report.process == "running" && report.readiness == "ready";
+        check_result(
+            &mut results,
+            format!("{} service", service.as_str()),
+            if healthy {
+                CheckOutcome::Pass
+            } else {
+                CheckOutcome::Fail
+            },
+            format!("process={}, readiness={}", report.process, report.readiness),
+        );
+    }
+
+    let (migration_detail, migrations_healthy) = migration_status(paths, profile);
+    let migration_outcome = if migration_detail.starts_with("not checked") {
+        CheckOutcome::Skip
+    } else if migrations_healthy {
+        CheckOutcome::Pass
+    } else {
+        CheckOutcome::Fail
+    };
+    check_result(
+        &mut results,
+        "database migrations",
+        migration_outcome,
+        migration_detail,
+    );
+
+    let (backup_detail, backup_healthy) = latest_backup(paths);
+    let backup_outcome = if backup_detail == "none" {
+        CheckOutcome::Skip
+    } else if backup_healthy {
+        CheckOutcome::Pass
+    } else {
+        CheckOutcome::Fail
+    };
+    check_result(&mut results, "latest backup", backup_outcome, backup_detail);
+
+    if let Some(frontend_url) = frontend_url(profile) {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build();
+        match client {
+            Ok(client) => {
+                match check_http_response(&client, &frontend_url)
+                    .and_then(|response| response.text().map_err(Into::into))
+                {
+                    Ok(body) if body.to_ascii_lowercase().contains("<!doctype html") => {
+                        check_result(
+                            &mut results,
+                            "frontend page",
+                            CheckOutcome::Pass,
+                            frontend_url,
+                        )
+                    }
+                    Ok(_) => check_result(
+                        &mut results,
+                        "frontend page",
+                        CheckOutcome::Fail,
+                        "response is not an HTML document",
+                    ),
+                    Err(error) => check_result(
+                        &mut results,
+                        "frontend page",
+                        CheckOutcome::Fail,
+                        error.to_string(),
+                    ),
+                }
+                check_api(&client, profile, &mut results);
+            }
+            Err(error) => check_result(
+                &mut results,
+                "HTTP client",
+                CheckOutcome::Fail,
+                error.to_string(),
+            ),
+        }
+    } else {
+        check_result(
+            &mut results,
+            "frontend page",
+            CheckOutcome::Skip,
+            "frontend is not configured",
+        );
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build();
+        match client {
+            Ok(client) => check_api(&client, profile, &mut results),
+            Err(error) => check_result(
+                &mut results,
+                "HTTP client",
+                CheckOutcome::Fail,
+                error.to_string(),
+            ),
+        }
+    }
+
+    println!("Profile check: {}\n", profile.profile_name);
+    for result in &results {
+        let label = match result.outcome {
+            CheckOutcome::Pass => "PASS",
+            CheckOutcome::Fail => "FAIL",
+            CheckOutcome::Skip => "SKIP",
+        };
+        println!("[{label}] {:<24} {}", result.name, result.detail);
+    }
+    let passed = results
+        .iter()
+        .filter(|result| result.outcome == CheckOutcome::Pass)
+        .count();
+    let failed = results
+        .iter()
+        .filter(|result| result.outcome == CheckOutcome::Fail)
+        .count();
+    let skipped = results
+        .iter()
+        .filter(|result| result.outcome == CheckOutcome::Skip)
+        .count();
+    println!("\nResult: {passed} passed, {failed} failed, {skipped} skipped");
+
+    checks_succeeded(&results)
+}
+
+fn checks_succeeded(results: &[CheckResult]) -> bool {
+    !results
+        .iter()
+        .any(|result| result.outcome == CheckOutcome::Fail)
 }
 
 fn local_port_in_use(port: u16) -> Result<bool> {
@@ -1928,6 +2378,13 @@ fn run() -> Result<ExitCode> {
                 ExitCode::from(1)
             });
         }
+        CommandKind::Check => {
+            return Ok(if run_checks(&paths, &profile) {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(1)
+            });
+        }
         CommandKind::ListUsers => list_users(&paths, &profile)?,
         CommandKind::ExportContributions { username, file } => {
             export_contributions(&registry, &paths, &profile, &username, file.as_deref())?
@@ -2076,6 +2533,43 @@ mod tests {
 
         assert_eq!(cli.profile.as_deref(), Some("dev"));
         assert!(matches!(cli.command, CommandKind::Status));
+    }
+
+    #[test]
+    fn check_command_accepts_a_profile() {
+        let cli = Cli::try_parse_from(["rimbunctl", "dev", "check"]).expect("parse check command");
+
+        assert_eq!(cli.profile.as_deref(), Some("dev"));
+        assert!(matches!(cli.command, CommandKind::Check));
+    }
+
+    #[test]
+    fn skipped_checks_do_not_fail_the_run() {
+        let results = vec![
+            CheckResult {
+                name: "required".to_owned(),
+                outcome: CheckOutcome::Pass,
+                detail: String::new(),
+            },
+            CheckResult {
+                name: "optional".to_owned(),
+                outcome: CheckOutcome::Skip,
+                detail: String::new(),
+            },
+        ];
+
+        assert!(checks_succeeded(&results));
+    }
+
+    #[test]
+    fn any_failed_check_fails_the_run() {
+        let results = vec![CheckResult {
+            name: "required".to_owned(),
+            outcome: CheckOutcome::Fail,
+            detail: String::new(),
+        }];
+
+        assert!(!checks_succeeded(&results));
     }
 
     #[test]

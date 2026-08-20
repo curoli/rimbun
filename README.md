@@ -136,6 +136,7 @@ Available commands:
 ./rimbunctl dev stop [service]
 ./rimbunctl dev restart [service]
 ./rimbunctl dev status
+./rimbunctl dev check
 ./rimbunctl dev log [service] [--follow]
 ./rimbunctl dev list-profiles
 ./rimbunctl dev backup [name]
@@ -166,6 +167,7 @@ Examples:
 ./rimbunctl dev start
 ./rimbunctl dev restart backend
 ./rimbunctl dev status
+./rimbunctl dev check
 ./rimbunctl dev log frontend --follow
 ./rimbunctl dev log all
 ./rimbunctl dev list-profiles
@@ -183,6 +185,11 @@ minutes, which also covers backend recompilation in development.
 `status` reports each configured process and readiness probe, endpoints, PIDs, log paths,
 migration state, the latest backup, and an overall `healthy`, `degraded`, or `stopped` state.
 It exits successfully only when the profile is healthy, so it can also be used in scripts.
+`check` performs non-destructive smoke tests for service processes, readiness, migrations, the
+latest backup, the frontend, site settings, the document list, and the first visible document.
+Set `RIMBUN_CHECK_USERNAME` and `RIMBUN_CHECK_PASSWORD` in the invoking environment to
+also test login and `/api/me`; the temporary session is logged out afterward. Failed checks return
+exit code 1, while unavailable optional checks are reported as `SKIP`.
 `backup` records a SHA-256 checksum and verifies restorability by loading the dump into a temporary
 database. The temporary database is removed afterward. `restore` validates this metadata before
 touching the target database. Legacy backups without metadata remain restorable with a warning;

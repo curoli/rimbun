@@ -2619,6 +2619,7 @@ dependencies = [
  "chrono",
  "clap",
  "nix",
+ "reqwest",
  "serde",
  "serde_json",
  "sha2",
