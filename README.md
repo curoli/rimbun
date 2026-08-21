@@ -137,6 +137,8 @@ Available commands:
 ./rimbunctl dev restart [service]
 ./rimbunctl dev status
 ./rimbunctl dev check
+./rimbunctl dev deploy [--dry-run] [--allow-dirty]
+./rimbunctl dev releases
 ./rimbunctl dev log [service] [--follow]
 ./rimbunctl dev list-profiles
 ./rimbunctl dev backup [name]
@@ -158,6 +160,7 @@ Runtime state is written under `.rimbun/dev/`:
 
 - backups: `.rimbun/dev/backups/*.sql`
 - backup metadata and checksums: `.rimbun/dev/backups/*.sql.json`
+- deployment records: `.rimbun/dev/releases/*.json`
 - logs: `.rimbun/dev/logs/*.log`
 - pids: `.rimbun/dev/pids/*.pid`
 
@@ -168,6 +171,9 @@ Examples:
 ./rimbunctl dev restart backend
 ./rimbunctl dev status
 ./rimbunctl dev check
+./rimbunctl dev deploy --dry-run
+./rimbunctl dev deploy
+./rimbunctl dev releases
 ./rimbunctl dev log frontend --follow
 ./rimbunctl dev log all
 ./rimbunctl dev list-profiles
@@ -190,6 +196,16 @@ latest backup, the frontend, site settings, the document list, and the first vis
 Set `RIMBUN_CHECK_USERNAME` and `RIMBUN_CHECK_PASSWORD` in the invoking environment to
 also test login and `/api/me`; the temporary session is logged out afterward. Failed checks return
 exit code 1, while unavailable optional checks are reported as `SKIP`.
+`deploy --dry-run` validates and prints the deployment plan without changing services or data.
+`deploy` refuses a dirty Git worktree by default, prevents concurrent deployments for the same
+profile, creates a verified backup, builds all configured artifacts, stops application services,
+runs migrations, starts services with readiness checks, and finally runs `check`. Every completed
+or failed phase is recorded under `.rimbun/<state_namespace>/releases/`; inspect the summary with
+`releases`. Use `--allow-dirty` only when intentionally testing uncommitted code. The initial
+deployment configuration is enabled for local development and test profiles; production profiles
+remain disabled until their frontend publishing and release layout are configured.
+If a deployment fails after application services were stopped, inspect `releases` and the service
+logs, repair the reported phase, and run `rimbunctl <PROFILE> start` before retrying the deployment.
 `backup` records a SHA-256 checksum and verifies restorability by loading the dump into a temporary
 database. The temporary database is removed afterward. `restore` validates this metadata before
 touching the target database. Legacy backups without metadata remain restorable with a warning;
@@ -243,6 +259,10 @@ depends_on = ["db", "embedding"]
 workdir = "web"
 bootstrap = "test -d node_modules || npm install"
 run = "npm run dev -- --host 127.0.0.1 --port {frontend_port} < /dev/null"
+
+[fragments.project_demo.deployment]
+build = ["cargo build --workspace", "npm run build --prefix web"]
+migrate = "./target/debug/rimbun-migrate"
 
 [profiles.demo_local]
 extends = ["local-docker", "project_demo"]

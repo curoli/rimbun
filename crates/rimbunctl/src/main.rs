@@ -44,6 +44,13 @@ enum CommandKind {
     ListProfiles,
     Status,
     Check,
+    Deploy {
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        allow_dirty: bool,
+    },
+    Releases,
     ListUsers,
     ExportContributions {
         username: String,
@@ -164,6 +171,7 @@ struct LayerConfig {
     #[serde(default)]
     services: BTreeMap<String, ServiceConfig>,
     database: Option<DatabaseConfig>,
+    deployment: Option<DeploymentConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -178,6 +186,7 @@ struct ProfileConfig {
     #[serde(default)]
     services: BTreeMap<String, ServiceConfig>,
     database: Option<DatabaseConfig>,
+    deployment: Option<DeploymentConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -196,6 +205,12 @@ struct DatabaseConfig {
     verify: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+struct DeploymentConfig {
+    build: Option<Vec<String>>,
+    migrate: Option<String>,
+}
+
 #[derive(Debug, Clone, Default)]
 struct ResolvedProfile {
     profile_name: String,
@@ -204,6 +219,7 @@ struct ResolvedProfile {
     env: BTreeMap<String, String>,
     services: BTreeMap<ServiceName, ResolvedServiceConfig>,
     database: Option<ResolvedDatabaseConfig>,
+    deployment: Option<ResolvedDeploymentConfig>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -222,6 +238,12 @@ struct ResolvedDatabaseConfig {
     verify: Option<String>,
 }
 
+#[derive(Debug, Clone, Default)]
+struct ResolvedDeploymentConfig {
+    build: Vec<String>,
+    migrate: String,
+}
+
 #[derive(Debug)]
 struct ConfigRegistry {
     fragments: BTreeMap<String, LayerConfig>,
@@ -235,6 +257,7 @@ struct Paths {
     backup_dir: PathBuf,
     log_dir: PathBuf,
     pid_dir: PathBuf,
+    release_dir: PathBuf,
 }
 
 #[derive(Debug)]
@@ -300,6 +323,39 @@ struct CheckResult {
     detail: String,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+struct ReleaseRecord {
+    format_version: u32,
+    id: String,
+    profile: String,
+    git_commit: String,
+    #[serde(default)]
+    worktree_dirty: bool,
+    started_at: String,
+    completed_at: Option<String>,
+    status: String,
+    backup: Option<String>,
+    phases: Vec<ReleasePhase>,
+}
+
+struct DeploymentLock {
+    path: PathBuf,
+}
+
+impl Drop for DeploymentLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct ReleasePhase {
+    name: String,
+    status: String,
+    completed_at: String,
+    detail: Option<String>,
+}
+
 fn repo_root() -> Result<PathBuf> {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -316,6 +372,7 @@ fn state_paths(state_namespace: &str) -> Result<Paths> {
         backup_dir: state_dir.join("backups"),
         log_dir: state_dir.join("logs"),
         pid_dir: state_dir.join("pids"),
+        release_dir: state_dir.join("releases"),
         state_dir,
     })
 }
@@ -324,6 +381,7 @@ fn ensure_state_dirs(paths: &Paths) -> Result<()> {
     fs::create_dir_all(&paths.backup_dir)?;
     fs::create_dir_all(&paths.log_dir)?;
     fs::create_dir_all(&paths.pid_dir)?;
+    fs::create_dir_all(&paths.release_dir)?;
     Ok(())
 }
 
@@ -423,6 +481,13 @@ fn builtin_registry() -> ConfigRegistry {
                     },
                 ),
             ]),
+            deployment: Some(DeploymentConfig {
+                build: Some(vec![
+                    "cargo build --workspace".to_owned(),
+                    "npm run build --prefix web".to_owned(),
+                ]),
+                migrate: Some("./target/debug/rimbun-migrate".to_owned()),
+            }),
             ..LayerConfig::default()
         },
     );
@@ -497,6 +562,15 @@ fn merge_database(base: &mut DatabaseConfig, overlay: &DatabaseConfig) {
     }
 }
 
+fn merge_deployment(base: &mut DeploymentConfig, overlay: &DeploymentConfig) {
+    if let Some(build) = &overlay.build {
+        base.build = Some(build.clone());
+    }
+    if let Some(migrate) = &overlay.migrate {
+        base.migrate = Some(migrate.clone());
+    }
+}
+
 fn merge_layer(base: &mut LayerConfig, overlay: &LayerConfig) {
     if let Some(namespace) = &overlay.state_namespace {
         base.state_namespace = Some(namespace.clone());
@@ -511,6 +585,13 @@ fn merge_layer(base: &mut LayerConfig, overlay: &LayerConfig) {
             merge_database(base_database, database);
         } else {
             base.database = Some(database.clone());
+        }
+    }
+    if let Some(deployment) = &overlay.deployment {
+        if let Some(base_deployment) = &mut base.deployment {
+            merge_deployment(base_deployment, deployment);
+        } else {
+            base.deployment = Some(deployment.clone());
         }
     }
 }
@@ -535,6 +616,7 @@ fn resolve_fragment(
             env: profile.env.clone(),
             services: profile.services.clone(),
             database: profile.database.clone(),
+            deployment: profile.deployment.clone(),
         }
     } else {
         bail!("unknown fragment/profile '{name}'");
@@ -601,6 +683,7 @@ fn resolve_profile(registry: &ConfigRegistry, profile_name: &str) -> Result<Reso
             env: profile.env.clone(),
             services: profile.services.clone(),
             database: profile.database.clone(),
+            deployment: profile.deployment.clone(),
         },
     );
 
@@ -690,6 +773,28 @@ fn resolve_profile(registry: &ConfigRegistry, profile_name: &str) -> Result<Reso
         })
         .transpose()?;
 
+    let deployment = resolved_layer
+        .deployment
+        .map(|deployment| {
+            let build = deployment
+                .build
+                .ok_or_else(|| anyhow!("deployment build commands are required"))?
+                .into_iter()
+                .map(|command| interpolate_template(&command, &vars))
+                .collect::<Vec<_>>();
+            if build.is_empty() {
+                bail!("deployment requires at least one build command");
+            }
+            let migrate = interpolate_template(
+                &deployment
+                    .migrate
+                    .ok_or_else(|| anyhow!("deployment migration command is required"))?,
+                &vars,
+            );
+            Ok::<_, anyhow::Error>(ResolvedDeploymentConfig { build, migrate })
+        })
+        .transpose()?;
+
     Ok(ResolvedProfile {
         profile_name: profile_name.to_owned(),
         state_namespace,
@@ -697,6 +802,7 @@ fn resolve_profile(registry: &ConfigRegistry, profile_name: &str) -> Result<Reso
         env,
         services,
         database,
+        deployment,
     })
 }
 
@@ -2261,7 +2367,7 @@ fn create_backup(
     paths: &Paths,
     profile: &ResolvedProfile,
     name: Option<&str>,
-) -> Result<()> {
+) -> Result<PathBuf> {
     ensure_db_running(registry, paths, profile)?;
 
     let database = database_config(profile)?;
@@ -2280,7 +2386,8 @@ fn create_backup(
     println!("Created backup {}", backup_path.display());
     let metadata = new_backup_metadata(profile, &backup_path)?;
     write_backup_metadata(&backup_path, &metadata)?;
-    verify_backup_file(paths, profile, &backup_path)
+    verify_backup_file(paths, profile, &backup_path)?;
+    Ok(backup_path)
 }
 
 fn resolve_backup_path(paths: &Paths, backup: &str) -> PathBuf {
@@ -2346,6 +2453,290 @@ fn restore_backup(
     Ok(())
 }
 
+fn current_git_commit(paths: &Paths) -> Result<String> {
+    let output = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&paths.repo_root)
+        .output()?;
+    if !output.status.success() {
+        bail!("failed to determine current Git commit");
+    }
+    Ok(String::from_utf8(output.stdout)?.trim().to_owned())
+}
+
+fn worktree_is_dirty(paths: &Paths) -> Result<bool> {
+    let output = Command::new("git")
+        .args(["status", "--porcelain", "--untracked-files=normal"])
+        .current_dir(&paths.repo_root)
+        .output()?;
+    if !output.status.success() {
+        bail!("failed to inspect Git worktree");
+    }
+    Ok(!output.stdout.is_empty())
+}
+
+fn deployment_config(profile: &ResolvedProfile) -> Result<&ResolvedDeploymentConfig> {
+    profile.deployment.as_ref().ok_or_else(|| {
+        anyhow!(
+            "profile '{}' has no deployment configuration",
+            profile.profile_name
+        )
+    })
+}
+
+fn deploy_preflight(paths: &Paths, profile: &ResolvedProfile, allow_dirty: bool) -> Result<()> {
+    let deployment = deployment_config(profile)?;
+    let database = database_config(profile)?;
+    if database.verify.is_none() {
+        bail!("deployment requires verified backup configuration");
+    }
+    if deployment
+        .build
+        .iter()
+        .any(|command| command.trim().is_empty())
+        || deployment.migrate.trim().is_empty()
+    {
+        bail!("deployment commands must not be empty");
+    }
+    for service in [
+        ServiceName::Embedding,
+        ServiceName::Backend,
+        ServiceName::Frontend,
+    ] {
+        if !profile.services.contains_key(&service) {
+            bail!("deployment requires managed '{}' service", service.as_str());
+        }
+    }
+    if !allow_dirty && worktree_is_dirty(paths)? {
+        bail!("Git worktree is dirty; commit changes or pass --allow-dirty intentionally");
+    }
+    Ok(())
+}
+
+fn release_path(paths: &Paths, release_id: &str) -> PathBuf {
+    paths.release_dir.join(format!("{release_id}.json"))
+}
+
+fn acquire_deployment_lock(paths: &Paths) -> Result<DeploymentLock> {
+    let path = paths.state_dir.join("deploy.lock");
+    if let Ok(raw) = fs::read_to_string(&path)
+        && let Some(pid) = raw
+            .lines()
+            .find_map(|line| line.strip_prefix("pid="))
+            .and_then(|value| value.parse::<i32>().ok())
+    {
+        if pid_running(pid) {
+            bail!("another deployment is running for this profile (PID {pid})");
+        }
+        let _ = fs::remove_file(&path);
+    }
+
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .with_context(|| format!("failed to acquire deployment lock {}", path.display()))?;
+    writeln!(file, "pid={}", std::process::id())?;
+    writeln!(file, "created_at={}", Utc::now().to_rfc3339())?;
+    Ok(DeploymentLock { path })
+}
+
+fn write_release(paths: &Paths, release: &ReleaseRecord) -> Result<()> {
+    let path = release_path(paths, &release.id);
+    let temporary = path.with_extension("json.tmp");
+    let mut raw = serde_json::to_string_pretty(release)?;
+    raw.push('\n');
+    fs::write(&temporary, raw)?;
+    fs::rename(&temporary, path)?;
+    Ok(())
+}
+
+fn execute_release_phase<T>(
+    paths: &Paths,
+    release: &mut ReleaseRecord,
+    name: &str,
+    action: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    println!("\n=== deploy: {name} ===");
+    match action() {
+        Ok(value) => {
+            release.phases.push(ReleasePhase {
+                name: name.to_owned(),
+                status: "passed".to_owned(),
+                completed_at: Utc::now().to_rfc3339(),
+                detail: None,
+            });
+            write_release(paths, release)?;
+            Ok(value)
+        }
+        Err(error) => {
+            release.phases.push(ReleasePhase {
+                name: name.to_owned(),
+                status: "failed".to_owned(),
+                completed_at: Utc::now().to_rfc3339(),
+                detail: Some(format!("{error:#}")),
+            });
+            release.status = "failed".to_owned();
+            release.completed_at = Some(Utc::now().to_rfc3339());
+            write_release(paths, release)?;
+            Err(error).context(format!("deployment {} failed during '{name}'", release.id))
+        }
+    }
+}
+
+fn print_deployment_plan(
+    paths: &Paths,
+    profile: &ResolvedProfile,
+    allow_dirty: bool,
+) -> Result<()> {
+    deploy_preflight(paths, profile, allow_dirty)?;
+    let deployment = deployment_config(profile)?;
+    println!("Deployment plan for profile {}", profile.profile_name);
+    println!("Git commit: {}", current_git_commit(paths)?);
+    println!("1. Ensure the managed database is ready");
+    println!("2. Create and restore-verify a database backup");
+    for (index, command) in deployment.build.iter().enumerate() {
+        println!("{}. Build: {command}", index + 3);
+    }
+    let stop_step = deployment.build.len() + 3;
+    println!("{stop_step}. Stop frontend, backend, and embedding services");
+    println!("{}. Migrate: {}", stop_step + 1, deployment.migrate);
+    println!(
+        "{}. Start embedding, backend, and frontend services",
+        stop_step + 2
+    );
+    println!("{}. Run profile smoke checks", stop_step + 3);
+    println!("\nDry run complete; no services or data were changed.");
+    Ok(())
+}
+
+fn deploy_profile(
+    registry: &ConfigRegistry,
+    paths: &Paths,
+    profile: &ResolvedProfile,
+    allow_dirty: bool,
+) -> Result<()> {
+    let _lock = acquire_deployment_lock(paths)?;
+    let release_id = Utc::now().format("%Y%m%d-%H%M%S-%3f").to_string();
+    let worktree_dirty = worktree_is_dirty(paths)?;
+    let mut release = ReleaseRecord {
+        format_version: 1,
+        id: release_id.clone(),
+        profile: profile.profile_name.clone(),
+        git_commit: current_git_commit(paths)?,
+        worktree_dirty,
+        started_at: Utc::now().to_rfc3339(),
+        completed_at: None,
+        status: "running".to_owned(),
+        backup: None,
+        phases: Vec::new(),
+    };
+    write_release(paths, &release)?;
+
+    execute_release_phase(paths, &mut release, "preflight", || {
+        deploy_preflight(paths, profile, allow_dirty)
+    })?;
+    execute_release_phase(paths, &mut release, "database readiness", || {
+        ensure_db_running(registry, paths, profile)?;
+        ensure_profile_database(paths, profile)
+    })?;
+    let backup_path = execute_release_phase(paths, &mut release, "verified backup", || {
+        create_backup(
+            registry,
+            paths,
+            profile,
+            Some(&format!("deploy-{release_id}")),
+        )
+    })?;
+    release.backup = Some(backup_path.display().to_string());
+    write_release(paths, &release)?;
+
+    let deployment = deployment_config(profile)?;
+    execute_release_phase(paths, &mut release, "build", || {
+        for command in &deployment.build {
+            println!("Running: {command}");
+            run_shell(command, &paths.repo_root, &profile.env)?;
+        }
+        Ok(())
+    })?;
+    execute_release_phase(paths, &mut release, "stop application services", || {
+        for service in [
+            ServiceName::Frontend,
+            ServiceName::Backend,
+            ServiceName::Embedding,
+        ] {
+            stop_service(paths, profile, service)?;
+        }
+        Ok(())
+    })?;
+    execute_release_phase(paths, &mut release, "database migrations", || {
+        run_shell(&deployment.migrate, &paths.repo_root, &profile.env)
+    })?;
+    execute_release_phase(paths, &mut release, "start application services", || {
+        for service in [
+            ServiceName::Embedding,
+            ServiceName::Backend,
+            ServiceName::Frontend,
+        ] {
+            start_service(registry, paths, profile, service)?;
+        }
+        Ok(())
+    })?;
+    execute_release_phase(paths, &mut release, "smoke checks", || {
+        if run_checks(paths, profile) {
+            Ok(())
+        } else {
+            bail!("profile smoke checks failed")
+        }
+    })?;
+
+    release.status = "deployed".to_owned();
+    release.completed_at = Some(Utc::now().to_rfc3339());
+    write_release(paths, &release)?;
+    println!("\nDeployment {release_id} completed successfully.");
+    Ok(())
+}
+
+fn list_releases(paths: &Paths) -> Result<()> {
+    let mut releases = fs::read_dir(&paths.release_dir)?
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().extension().and_then(|value| value.to_str()) == Some("json"))
+        .filter_map(|entry| {
+            let raw = fs::read_to_string(entry.path()).ok()?;
+            serde_json::from_str::<ReleaseRecord>(&raw).ok()
+        })
+        .collect::<Vec<_>>();
+    releases.sort_by(|left, right| right.id.cmp(&left.id));
+    if releases.is_empty() {
+        println!("No deployments recorded for this profile.");
+        return Ok(());
+    }
+    println!(
+        "{:<24} {:<10} {:<12} Git commit",
+        "Release", "Status", "Completed"
+    );
+    for release in releases {
+        let completed = release
+            .completed_at
+            .as_deref()
+            .unwrap_or("-")
+            .chars()
+            .take(10)
+            .collect::<String>();
+        let commit = release.git_commit.chars().take(12).collect::<String>();
+        let dirty_marker = if release.worktree_dirty {
+            " (dirty)"
+        } else {
+            ""
+        };
+        println!(
+            "{:<24} {:<10} {:<12} {commit}{dirty_marker}",
+            release.id, release.status, completed,
+        );
+    }
+    Ok(())
+}
+
 fn run() -> Result<ExitCode> {
     let repo_root = repo_root()?;
     let registry = load_registry(&repo_root)?;
@@ -2385,6 +2776,17 @@ fn run() -> Result<ExitCode> {
                 ExitCode::from(1)
             });
         }
+        CommandKind::Deploy {
+            dry_run,
+            allow_dirty,
+        } => {
+            if dry_run {
+                print_deployment_plan(&paths, &profile, allow_dirty)?;
+            } else {
+                deploy_profile(&registry, &paths, &profile, allow_dirty)?;
+            }
+        }
+        CommandKind::Releases => list_releases(&paths)?,
         CommandKind::ListUsers => list_users(&paths, &profile)?,
         CommandKind::ExportContributions { username, file } => {
             export_contributions(&registry, &paths, &profile, &username, file.as_deref())?
@@ -2427,7 +2829,7 @@ fn run() -> Result<ExitCode> {
         }
         CommandKind::Log { service, follow } => show_logs(&paths, &service, follow)?,
         CommandKind::Backup { name } => {
-            create_backup(&registry, &paths, &profile, name.as_deref())?
+            let _ = create_backup(&registry, &paths, &profile, name.as_deref())?;
         }
         CommandKind::VerifyBackup { backup } => {
             ensure_db_running(&registry, &paths, &profile)?;
@@ -2541,6 +2943,55 @@ mod tests {
 
         assert_eq!(cli.profile.as_deref(), Some("dev"));
         assert!(matches!(cli.command, CommandKind::Check));
+    }
+
+    #[test]
+    fn deploy_command_accepts_safety_flags() {
+        let cli = Cli::try_parse_from(["rimbunctl", "dev", "deploy", "--dry-run", "--allow-dirty"])
+            .expect("parse deploy command");
+
+        assert!(matches!(
+            cli.command,
+            CommandKind::Deploy {
+                dry_run: true,
+                allow_dirty: true
+            }
+        ));
+    }
+
+    #[test]
+    fn builtin_dev_profile_has_deployment_configuration() {
+        let profile = resolve_profile(&builtin_registry(), "dev").expect("resolve dev profile");
+        let deployment = deployment_config(&profile).expect("resolve deployment configuration");
+
+        assert_eq!(deployment.build.len(), 2);
+        assert_eq!(deployment.migrate, "./target/debug/rimbun-migrate");
+    }
+
+    #[test]
+    fn deployment_lock_prevents_concurrent_deployments() {
+        let state_dir = std::env::temp_dir().join(format!(
+            "rimbunctl-deploy-lock-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_micros()
+        ));
+        fs::create_dir_all(&state_dir).expect("create deployment state directory");
+        let paths = Paths {
+            repo_root: state_dir.clone(),
+            backup_dir: state_dir.join("backups"),
+            log_dir: state_dir.join("logs"),
+            pid_dir: state_dir.join("pids"),
+            release_dir: state_dir.join("releases"),
+            state_dir: state_dir.clone(),
+        };
+
+        let first = acquire_deployment_lock(&paths).expect("acquire first deployment lock");
+        assert!(acquire_deployment_lock(&paths).is_err());
+        drop(first);
+        let second = acquire_deployment_lock(&paths).expect("reacquire deployment lock");
+        drop(second);
+
+        fs::remove_dir_all(state_dir).expect("remove deployment state directory");
     }
 
     #[test]
