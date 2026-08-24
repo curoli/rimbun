@@ -132,13 +132,14 @@ You can also run the local stack through the repository script:
 Available commands:
 
 ```bash
-./rimbunctl dev start [service]
+./rimbunctl dev start [service] [--source]
 ./rimbunctl dev stop [service]
-./rimbunctl dev restart [service]
+./rimbunctl dev restart [service] [--source]
 ./rimbunctl dev status
 ./rimbunctl dev check
 ./rimbunctl dev deploy [--dry-run] [--allow-dirty]
 ./rimbunctl dev releases
+./rimbunctl dev rollback <release> [--dry-run]
 ./rimbunctl dev log [service] [--follow]
 ./rimbunctl dev list-profiles
 ./rimbunctl dev backup [name]
@@ -160,7 +161,8 @@ Runtime state is written under `.rimbun/dev/`:
 
 - backups: `.rimbun/dev/backups/*.sql`
 - backup metadata and checksums: `.rimbun/dev/backups/*.sql.json`
-- deployment records: `.rimbun/dev/releases/*.json`
+- immutable release artifacts and records: `.rimbun/dev/releases/`
+- atomically selected release: `.rimbun/dev/releases/current`
 - logs: `.rimbun/dev/logs/*.log`
 - pids: `.rimbun/dev/pids/*.pid`
 
@@ -174,6 +176,8 @@ Examples:
 ./rimbunctl dev deploy --dry-run
 ./rimbunctl dev deploy
 ./rimbunctl dev releases
+./rimbunctl dev rollback 20260821-120000-001 --dry-run
+./rimbunctl dev rollback 20260821-120000-001
 ./rimbunctl dev log frontend --follow
 ./rimbunctl dev log all
 ./rimbunctl dev list-profiles
@@ -204,6 +208,15 @@ or failed phase is recorded under `.rimbun/<state_namespace>/releases/`; inspect
 `releases`. Use `--allow-dirty` only when intentionally testing uncommitted code. The initial
 deployment configuration is enabled for local development and test profiles; production profiles
 remain disabled until their frontend publishing and release layout are configured.
+Each successful deployment archives the Rust binaries and built frontend before atomically moving
+the `current` symlink. SHA-256 checksums protect every archived binary and frontend file.
+`rollback` verifies these checksums, switches the symlink to an earlier archived release, restarts
+it, and runs smoke checks. If those fail, it attempts to restore the previously active application
+release. Rollback never changes the database automatically; use the separately verified backup
+only after explicitly deciding that an application-only rollback is insufficient. The newest five
+artifact releases are retained by default, while the active release is always protected.
+After a deployment, ordinary `start` and `restart` commands use the active archived release. Pass
+`--source` to intentionally run the development commands from the current worktree instead.
 If a deployment fails after application services were stopped, inspect `releases` and the service
 logs, repair the reported phase, and run `rimbunctl <PROFILE> start` before retrying the deployment.
 `backup` records a SHA-256 checksum and verifies restorability by loading the dump into a temporary
@@ -262,7 +275,20 @@ run = "npm run dev -- --host 127.0.0.1 --port {frontend_port} < /dev/null"
 
 [fragments.project_demo.deployment]
 build = ["cargo build --workspace", "npm run build --prefix web"]
-migrate = "./target/debug/rimbun-migrate"
+migrate = "{release_dir}/bin/rimbun-migrate"
+retention = 5
+
+[fragments.project_demo.deployment.artifacts]
+backend = "target/debug/rimbun-api"
+embedding = "target/debug/rimbun-embedding-service"
+migrate = "target/debug/rimbun-migrate"
+static = "target/debug/rimbun-static-server"
+frontend = "web/dist"
+
+[fragments.project_demo.deployment.run]
+backend = "{release_dir}/bin/rimbun-api"
+embedding = "{release_dir}/bin/rimbun-embedding-service"
+frontend = "{release_dir}/bin/rimbun-static-server {release_dir}/web {frontend_port}"
 
 [profiles.demo_local]
 extends = ["local-docker", "project_demo"]

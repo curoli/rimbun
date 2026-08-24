@@ -1,5 +1,6 @@
 [package]
 name = "rimbunctl"
+default-run = "rimbunctl"
 edition.workspace = true
 license.workspace = true
 version.workspace = true

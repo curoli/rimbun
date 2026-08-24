@@ -3,7 +3,7 @@ use std::{
     env, fs,
     io::{BufRead, BufReader, ErrorKind, Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
-    os::unix::process::CommandExt,
+    os::unix::{fs::symlink, process::CommandExt},
     path::{Path, PathBuf},
     process::ExitCode,
     process::{Command, Stdio},
@@ -51,6 +51,11 @@ enum CommandKind {
         allow_dirty: bool,
     },
     Releases,
+    Rollback {
+        release: String,
+        #[arg(long)]
+        dry_run: bool,
+    },
     ListUsers,
     ExportContributions {
         username: String,
@@ -65,6 +70,8 @@ enum CommandKind {
     Start {
         #[arg(default_value = "all")]
         service: ServiceTarget,
+        #[arg(long)]
+        source: bool,
     },
     Stop {
         #[arg(default_value = "all")]
@@ -73,6 +80,8 @@ enum CommandKind {
     Restart {
         #[arg(default_value = "all")]
         service: ServiceTarget,
+        #[arg(long)]
+        source: bool,
     },
     Log {
         #[arg(default_value = "all")]
@@ -209,6 +218,11 @@ struct DatabaseConfig {
 struct DeploymentConfig {
     build: Option<Vec<String>>,
     migrate: Option<String>,
+    #[serde(default)]
+    artifacts: BTreeMap<String, String>,
+    #[serde(default)]
+    run: BTreeMap<String, String>,
+    retention: Option<usize>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -242,6 +256,9 @@ struct ResolvedDatabaseConfig {
 struct ResolvedDeploymentConfig {
     build: Vec<String>,
     migrate: String,
+    artifacts: BTreeMap<String, String>,
+    run: BTreeMap<ServiceName, String>,
+    retention: usize,
 }
 
 #[derive(Debug)]
@@ -323,7 +340,7 @@ struct CheckResult {
     detail: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 struct ReleaseRecord {
     format_version: u32,
     id: String,
@@ -335,6 +352,12 @@ struct ReleaseRecord {
     completed_at: Option<String>,
     status: String,
     backup: Option<String>,
+    #[serde(default)]
+    artifact_dir: Option<String>,
+    #[serde(default)]
+    activated_at: Option<String>,
+    #[serde(default)]
+    artifact_checksums: BTreeMap<String, String>,
     phases: Vec<ReleasePhase>,
 }
 
@@ -348,7 +371,7 @@ impl Drop for DeploymentLock {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 struct ReleasePhase {
     name: String,
     status: String,
@@ -486,7 +509,39 @@ fn builtin_registry() -> ConfigRegistry {
                     "cargo build --workspace".to_owned(),
                     "npm run build --prefix web".to_owned(),
                 ]),
-                migrate: Some("./target/debug/rimbun-migrate".to_owned()),
+                migrate: Some("{release_dir}/bin/rimbun-migrate".to_owned()),
+                artifacts: BTreeMap::from([
+                    ("backend".to_owned(), "target/debug/rimbun-api".to_owned()),
+                    (
+                        "embedding".to_owned(),
+                        "target/debug/rimbun-embedding-service".to_owned(),
+                    ),
+                    (
+                        "migrate".to_owned(),
+                        "target/debug/rimbun-migrate".to_owned(),
+                    ),
+                    (
+                        "static".to_owned(),
+                        "target/debug/rimbun-static-server".to_owned(),
+                    ),
+                    ("frontend".to_owned(), "web/dist".to_owned()),
+                ]),
+                run: BTreeMap::from([
+                    (
+                        "embedding".to_owned(),
+                        "{release_dir}/bin/rimbun-embedding-service".to_owned(),
+                    ),
+                    (
+                        "backend".to_owned(),
+                        "{release_dir}/bin/rimbun-api".to_owned(),
+                    ),
+                    (
+                        "frontend".to_owned(),
+                        "{release_dir}/bin/rimbun-static-server {release_dir}/web {frontend_port}"
+                            .to_owned(),
+                    ),
+                ]),
+                retention: Some(5),
             }),
             ..LayerConfig::default()
         },
@@ -568,6 +623,11 @@ fn merge_deployment(base: &mut DeploymentConfig, overlay: &DeploymentConfig) {
     }
     if let Some(migrate) = &overlay.migrate {
         base.migrate = Some(migrate.clone());
+    }
+    base.artifacts.extend(overlay.artifacts.clone());
+    base.run.extend(overlay.run.clone());
+    if let Some(retention) = overlay.retention {
+        base.retention = Some(retention);
     }
 }
 
@@ -791,7 +851,30 @@ fn resolve_profile(registry: &ConfigRegistry, profile_name: &str) -> Result<Reso
                     .ok_or_else(|| anyhow!("deployment migration command is required"))?,
                 &vars,
             );
-            Ok::<_, anyhow::Error>(ResolvedDeploymentConfig { build, migrate })
+            let artifacts = deployment
+                .artifacts
+                .into_iter()
+                .map(|(name, path)| (name, interpolate_template(&path, &vars)))
+                .collect();
+            let run = deployment
+                .run
+                .into_iter()
+                .map(|(name, command)| {
+                    let service = name.parse().map_err(|message: String| anyhow!(message))?;
+                    Ok((service, interpolate_template(&command, &vars)))
+                })
+                .collect::<Result<BTreeMap<_, _>>>()?;
+            let retention = deployment.retention.unwrap_or(5);
+            if retention < 2 {
+                bail!("deployment retention must keep at least two releases");
+            }
+            Ok::<_, anyhow::Error>(ResolvedDeploymentConfig {
+                build,
+                migrate,
+                artifacts,
+                run,
+                retention,
+            })
         })
         .transpose()?;
 
@@ -815,7 +898,15 @@ fn log_path(paths: &Paths, service: ServiceName) -> PathBuf {
 }
 
 fn pid_running(pid: i32) -> bool {
-    kill(Pid::from_raw(pid), None).is_ok()
+    if kill(Pid::from_raw(pid), None).is_err() {
+        return false;
+    }
+    let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat")) else {
+        return true;
+    };
+    stat.rsplit_once(") ")
+        .and_then(|(_, fields)| fields.chars().next())
+        != Some('Z')
 }
 
 fn read_pids(paths: &Paths, service: ServiceName) -> Result<Option<ServicePids>> {
@@ -1966,6 +2057,22 @@ fn start_service(
         profile.profile_name
     );
 
+    ensure_service_port_available(registry, profile, service)?;
+
+    let config = service_config(profile, service)?;
+    let workdir = paths.repo_root.join(&config.workdir);
+    if let Some(bootstrap) = &config.bootstrap {
+        run_shell(bootstrap, &workdir, &profile.env)?;
+    }
+    start_logged_command(paths, profile, service, &workdir, &config.run)?;
+    wait_for_service_ready(paths, profile, service)
+}
+
+fn ensure_service_port_available(
+    registry: &ConfigRegistry,
+    profile: &ResolvedProfile,
+    service: ServiceName,
+) -> Result<()> {
     if let Some(port) = expected_service_port(profile, service)
         && local_port_in_use(port)?
     {
@@ -1990,14 +2097,7 @@ fn start_service(
             details
         );
     }
-
-    let config = service_config(profile, service)?;
-    let workdir = paths.repo_root.join(&config.workdir);
-    if let Some(bootstrap) = &config.bootstrap {
-        run_shell(bootstrap, &workdir, &profile.env)?;
-    }
-    start_logged_command(paths, profile, service, &workdir, &config.run)?;
-    wait_for_service_ready(paths, profile, service)
+    Ok(())
 }
 
 fn stop_service(paths: &Paths, profile: &ResolvedProfile, service: ServiceName) -> Result<()> {
@@ -2498,6 +2598,15 @@ fn deploy_preflight(paths: &Paths, profile: &ResolvedProfile, allow_dirty: bool)
     {
         bail!("deployment commands must not be empty");
     }
+    for artifact in ["backend", "embedding", "migrate", "static", "frontend"] {
+        if !deployment
+            .artifacts
+            .get(artifact)
+            .is_some_and(|path| !path.trim().is_empty())
+        {
+            bail!("deployment artifact '{artifact}' is required");
+        }
+    }
     for service in [
         ServiceName::Embedding,
         ServiceName::Backend,
@@ -2505,6 +2614,16 @@ fn deploy_preflight(paths: &Paths, profile: &ResolvedProfile, allow_dirty: bool)
     ] {
         if !profile.services.contains_key(&service) {
             bail!("deployment requires managed '{}' service", service.as_str());
+        }
+        if !deployment
+            .run
+            .get(&service)
+            .is_some_and(|command| !command.trim().is_empty())
+        {
+            bail!(
+                "deployment run command for '{}' is required",
+                service.as_str()
+            );
         }
     }
     if !allow_dirty && worktree_is_dirty(paths)? {
@@ -2515,6 +2634,253 @@ fn deploy_preflight(paths: &Paths, profile: &ResolvedProfile, allow_dirty: bool)
 
 fn release_path(paths: &Paths, release_id: &str) -> PathBuf {
     paths.release_dir.join(format!("{release_id}.json"))
+}
+
+fn release_artifact_dir(paths: &Paths, release_id: &str) -> PathBuf {
+    paths.release_dir.join(release_id)
+}
+
+fn validate_release_id(release_id: &str) -> Result<()> {
+    if release_id.is_empty()
+        || !release_id
+            .chars()
+            .all(|character| character.is_ascii_digit() || character == '-')
+    {
+        bail!("invalid release id '{release_id}'");
+    }
+    Ok(())
+}
+
+fn copy_tree(source: &Path, destination: &Path) -> Result<()> {
+    fs::create_dir_all(destination)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let target = destination.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_tree(&entry.path(), &target)?;
+        } else if file_type.is_file() {
+            fs::copy(entry.path(), target)?;
+        } else {
+            bail!(
+                "release artifacts must not contain symlinks or special files: {}",
+                entry.path().display()
+            );
+        }
+    }
+    Ok(())
+}
+
+fn archive_release_artifacts(
+    paths: &Paths,
+    deployment: &ResolvedDeploymentConfig,
+    release_id: &str,
+) -> Result<PathBuf> {
+    validate_release_id(release_id)?;
+    let destination = release_artifact_dir(paths, release_id);
+    let staging = paths.release_dir.join(format!(".{release_id}.staging"));
+    if destination.exists() || staging.exists() {
+        bail!("release artifact path already exists for '{release_id}'");
+    }
+    fs::create_dir_all(staging.join("bin"))?;
+
+    let archive_result = (|| {
+        for (name, target_name) in [
+            ("backend", "rimbun-api"),
+            ("embedding", "rimbun-embedding-service"),
+            ("migrate", "rimbun-migrate"),
+            ("static", "rimbun-static-server"),
+        ] {
+            let source = paths.repo_root.join(
+                deployment
+                    .artifacts
+                    .get(name)
+                    .ok_or_else(|| anyhow!("deployment artifact '{name}' is missing"))?,
+            );
+            if !source.is_file() {
+                bail!("release artifact not found: {}", source.display());
+            }
+            fs::copy(source, staging.join("bin").join(target_name))?;
+        }
+
+        let frontend = paths.repo_root.join(
+            deployment
+                .artifacts
+                .get("frontend")
+                .ok_or_else(|| anyhow!("deployment artifact 'frontend' is missing"))?,
+        );
+        if !frontend.is_dir() {
+            bail!(
+                "frontend release artifact not found: {}",
+                frontend.display()
+            );
+        }
+        copy_tree(&frontend, &staging.join("web"))?;
+        fs::rename(&staging, &destination)?;
+        Ok(())
+    })();
+
+    if archive_result.is_err() {
+        let _ = fs::remove_dir_all(&staging);
+    }
+    archive_result?;
+    Ok(destination)
+}
+
+fn artifact_checksums(root: &Path) -> Result<BTreeMap<String, String>> {
+    fn visit(root: &Path, current: &Path, checksums: &mut BTreeMap<String, String>) -> Result<()> {
+        for entry in fs::read_dir(current)? {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            if file_type.is_dir() {
+                visit(root, &entry.path(), checksums)?;
+            } else if file_type.is_file() && entry.file_name() != "manifest.json" {
+                let relative = entry
+                    .path()
+                    .strip_prefix(root)?
+                    .to_string_lossy()
+                    .to_string();
+                checksums.insert(relative, sha256_file(&entry.path())?);
+            }
+        }
+        Ok(())
+    }
+
+    let mut checksums = BTreeMap::new();
+    visit(root, root, &mut checksums)?;
+    Ok(checksums)
+}
+
+fn verify_release_artifacts(paths: &Paths, release: &ReleaseRecord) -> Result<()> {
+    let root = release_artifact_dir(paths, &release.id);
+    if release.artifact_checksums.is_empty() {
+        eprintln!(
+            "WARNING: release '{}' predates artifact checksums and cannot be integrity-verified",
+            release.id
+        );
+        return Ok(());
+    }
+    let actual = artifact_checksums(&root)?;
+    if actual != release.artifact_checksums {
+        bail!(
+            "release '{}' failed artifact integrity verification",
+            release.id
+        );
+    }
+    Ok(())
+}
+
+fn active_release_id(paths: &Paths) -> Result<Option<String>> {
+    let current = paths.release_dir.join("current");
+    match fs::read_link(&current) {
+        Ok(target) => Ok(target
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_owned)),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error).with_context(|| format!("failed to read {}", current.display())),
+    }
+}
+
+fn activate_release(paths: &Paths, release_id: &str) -> Result<()> {
+    validate_release_id(release_id)?;
+    let artifacts = release_artifact_dir(paths, release_id);
+    if !artifacts.is_dir() {
+        bail!("release '{release_id}' has no archived artifacts");
+    }
+
+    let current = paths.release_dir.join("current");
+    if current.exists() && !current.is_symlink() {
+        bail!("{} exists but is not a symlink", current.display());
+    }
+    let temporary = paths
+        .release_dir
+        .join(format!(".current-{}.tmp", std::process::id()));
+    let _ = fs::remove_file(&temporary);
+    symlink(release_id, &temporary)?;
+    fs::rename(&temporary, &current)?;
+    Ok(())
+}
+
+fn release_command(
+    deployment: &ResolvedDeploymentConfig,
+    service: ServiceName,
+    artifact_dir: &Path,
+) -> Result<String> {
+    let template = deployment.run.get(&service).ok_or_else(|| {
+        anyhow!(
+            "deployment run command for '{}' is missing",
+            service.as_str()
+        )
+    })?;
+    Ok(template.replace(
+        "{release_dir}",
+        &shell_quote(&artifact_dir.display().to_string()),
+    ))
+}
+
+fn start_release_service(
+    registry: &ConfigRegistry,
+    paths: &Paths,
+    profile: &ResolvedProfile,
+    service: ServiceName,
+    release_id: &str,
+) -> Result<()> {
+    if service_status(paths, service)? {
+        println!("{} already running", service.as_str());
+        return wait_for_service_ready(paths, profile, service);
+    }
+    ensure_service_port_available(registry, profile, service)?;
+    let deployment = deployment_config(profile)?;
+    let artifacts = release_artifact_dir(paths, release_id);
+    let command = release_command(deployment, service, &artifacts)?;
+    println!("Starting {} from release {release_id}", service.as_str());
+    start_logged_command(paths, profile, service, &paths.repo_root, &command)?;
+    wait_for_service_ready(paths, profile, service)
+}
+
+fn start_release_services(
+    registry: &ConfigRegistry,
+    paths: &Paths,
+    profile: &ResolvedProfile,
+    release_id: &str,
+) -> Result<()> {
+    for service in [
+        ServiceName::Embedding,
+        ServiceName::Backend,
+        ServiceName::Frontend,
+    ] {
+        start_release_service(registry, paths, profile, service, release_id)?;
+    }
+    Ok(())
+}
+
+fn start_configured_service(
+    registry: &ConfigRegistry,
+    paths: &Paths,
+    profile: &ResolvedProfile,
+    service: ServiceName,
+    source: bool,
+) -> Result<()> {
+    if service == ServiceName::Db || source || profile.deployment.is_none() {
+        return start_service(registry, paths, profile, service);
+    }
+    let Some(release_id) = active_release_id(paths)? else {
+        return start_service(registry, paths, profile, service);
+    };
+    let _ = validate_rollback_target(paths, profile, &release_id)?;
+    start_release_service(registry, paths, profile, service, &release_id)
+}
+
+fn stop_application_services(paths: &Paths, profile: &ResolvedProfile) -> Result<()> {
+    for service in [
+        ServiceName::Frontend,
+        ServiceName::Backend,
+        ServiceName::Embedding,
+    ] {
+        stop_service(paths, profile, service)?;
+    }
+    Ok(())
 }
 
 fn acquire_deployment_lock(paths: &Paths) -> Result<DeploymentLock> {
@@ -2543,10 +2909,21 @@ fn acquire_deployment_lock(paths: &Paths) -> Result<DeploymentLock> {
 
 fn write_release(paths: &Paths, release: &ReleaseRecord) -> Result<()> {
     let path = release_path(paths, &release.id);
-    let temporary = path.with_extension("json.tmp");
     let mut raw = serde_json::to_string_pretty(release)?;
     raw.push('\n');
-    fs::write(&temporary, raw)?;
+    write_atomic(&path, raw.as_bytes())?;
+    if release.artifact_dir.is_some() {
+        let artifact_dir = release_artifact_dir(paths, &release.id);
+        if artifact_dir.is_dir() {
+            write_atomic(&artifact_dir.join("manifest.json"), raw.as_bytes())?;
+        }
+    }
+    Ok(())
+}
+
+fn write_atomic(path: &Path, contents: &[u8]) -> Result<()> {
+    let temporary = path.with_extension("tmp");
+    fs::write(&temporary, contents)?;
     fs::rename(&temporary, path)?;
     Ok(())
 }
@@ -2598,14 +2975,22 @@ fn print_deployment_plan(
     for (index, command) in deployment.build.iter().enumerate() {
         println!("{}. Build: {command}", index + 3);
     }
-    let stop_step = deployment.build.len() + 3;
+    let archive_step = deployment.build.len() + 3;
+    println!("{archive_step}. Archive immutable release artifacts");
+    let stop_step = archive_step + 1;
     println!("{stop_step}. Stop frontend, backend, and embedding services");
     println!("{}. Migrate: {}", stop_step + 1, deployment.migrate);
+    println!("{}. Atomically activate the new release", stop_step + 2);
     println!(
         "{}. Start embedding, backend, and frontend services",
-        stop_step + 2
+        stop_step + 3
     );
-    println!("{}. Run profile smoke checks", stop_step + 3);
+    println!("{}. Run profile smoke checks", stop_step + 4);
+    println!(
+        "{}. Retain the newest {} releases",
+        stop_step + 5,
+        deployment.retention
+    );
     println!("\nDry run complete; no services or data were changed.");
     Ok(())
 }
@@ -2620,7 +3005,7 @@ fn deploy_profile(
     let release_id = Utc::now().format("%Y%m%d-%H%M%S-%3f").to_string();
     let worktree_dirty = worktree_is_dirty(paths)?;
     let mut release = ReleaseRecord {
-        format_version: 1,
+        format_version: 2,
         id: release_id.clone(),
         profile: profile.profile_name.clone(),
         git_commit: current_git_commit(paths)?,
@@ -2629,6 +3014,9 @@ fn deploy_profile(
         completed_at: None,
         status: "running".to_owned(),
         backup: None,
+        artifact_dir: None,
+        activated_at: None,
+        artifact_checksums: BTreeMap::new(),
         phases: Vec::new(),
     };
     write_release(paths, &release)?;
@@ -2659,28 +3047,35 @@ fn deploy_profile(
         }
         Ok(())
     })?;
+    release.artifact_dir = Some(release_id.clone());
+    let checksums =
+        execute_release_phase(paths, &mut release, "archive release artifacts", || {
+            let artifacts = archive_release_artifacts(paths, deployment, &release_id)?;
+            artifact_checksums(&artifacts)
+        })?;
+    release.artifact_checksums = checksums;
+    write_release(paths, &release)?;
     execute_release_phase(paths, &mut release, "stop application services", || {
-        for service in [
-            ServiceName::Frontend,
-            ServiceName::Backend,
-            ServiceName::Embedding,
-        ] {
-            stop_service(paths, profile, service)?;
-        }
-        Ok(())
+        stop_application_services(paths, profile)
     })?;
     execute_release_phase(paths, &mut release, "database migrations", || {
-        run_shell(&deployment.migrate, &paths.repo_root, &profile.env)
+        let command = deployment.migrate.replace(
+            "{release_dir}",
+            &shell_quote(
+                &release_artifact_dir(paths, &release_id)
+                    .display()
+                    .to_string(),
+            ),
+        );
+        run_shell(&command, &paths.repo_root, &profile.env)
     })?;
+    execute_release_phase(paths, &mut release, "activate release", || {
+        activate_release(paths, &release_id)
+    })?;
+    release.activated_at = Some(Utc::now().to_rfc3339());
+    write_release(paths, &release)?;
     execute_release_phase(paths, &mut release, "start application services", || {
-        for service in [
-            ServiceName::Embedding,
-            ServiceName::Backend,
-            ServiceName::Frontend,
-        ] {
-            start_service(registry, paths, profile, service)?;
-        }
-        Ok(())
+        start_release_services(registry, paths, profile, &release_id)
     })?;
     execute_release_phase(paths, &mut release, "smoke checks", || {
         if run_checks(paths, profile) {
@@ -2693,20 +3088,59 @@ fn deploy_profile(
     release.status = "deployed".to_owned();
     release.completed_at = Some(Utc::now().to_rfc3339());
     write_release(paths, &release)?;
+    prune_releases(paths, deployment.retention)?;
     println!("\nDeployment {release_id} completed successfully.");
     Ok(())
 }
 
-fn list_releases(paths: &Paths) -> Result<()> {
-    let mut releases = fs::read_dir(&paths.release_dir)?
-        .filter_map(Result::ok)
-        .filter(|entry| entry.path().extension().and_then(|value| value.to_str()) == Some("json"))
-        .filter_map(|entry| {
-            let raw = fs::read_to_string(entry.path()).ok()?;
-            serde_json::from_str::<ReleaseRecord>(&raw).ok()
-        })
-        .collect::<Vec<_>>();
+fn read_release(paths: &Paths, release_id: &str) -> Result<ReleaseRecord> {
+    validate_release_id(release_id)?;
+    let path = release_path(paths, release_id);
+    let raw = fs::read_to_string(&path)
+        .with_context(|| format!("failed to read release {}", path.display()))?;
+    serde_json::from_str(&raw)
+        .with_context(|| format!("failed to parse release {}", path.display()))
+}
+
+fn load_releases(paths: &Paths) -> Result<Vec<ReleaseRecord>> {
+    let mut releases = Vec::<ReleaseRecord>::new();
+    for entry in fs::read_dir(&paths.release_dir)? {
+        let entry = entry?;
+        if entry.path().extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        let raw = fs::read_to_string(entry.path())?;
+        releases.push(serde_json::from_str(&raw).with_context(|| {
+            format!("failed to parse release record {}", entry.path().display())
+        })?);
+    }
     releases.sort_by(|left, right| right.id.cmp(&left.id));
+    Ok(releases)
+}
+
+fn prune_releases(paths: &Paths, retention: usize) -> Result<()> {
+    let active = active_release_id(paths)?;
+    let releases = load_releases(paths)?;
+    let mut retained_artifacts = 0_usize;
+    for release in releases {
+        let artifacts = release_artifact_dir(paths, &release.id);
+        if !artifacts.is_dir() {
+            continue;
+        }
+        let protected = active.as_deref() == Some(&release.id) || retained_artifacts < retention;
+        if protected {
+            retained_artifacts += 1;
+            continue;
+        }
+        fs::remove_dir_all(&artifacts)?;
+        fs::remove_file(release_path(paths, &release.id))?;
+        println!("Pruned release artifacts {}", release.id);
+    }
+    Ok(())
+}
+
+fn list_releases(paths: &Paths) -> Result<()> {
+    let releases = load_releases(paths)?;
     if releases.is_empty() {
         println!("No deployments recorded for this profile.");
         return Ok(());
@@ -2715,6 +3149,7 @@ fn list_releases(paths: &Paths) -> Result<()> {
         "{:<24} {:<10} {:<12} Git commit",
         "Release", "Status", "Completed"
     );
+    let active = active_release_id(paths)?;
     for release in releases {
         let completed = release
             .completed_at
@@ -2729,12 +3164,147 @@ fn list_releases(paths: &Paths) -> Result<()> {
         } else {
             ""
         };
+        let active_marker = if active.as_deref() == Some(&release.id) {
+            " *active"
+        } else if release.artifact_dir.is_none() {
+            " (no artifacts)"
+        } else {
+            ""
+        };
+        let integrity_marker =
+            if release.artifact_dir.is_some() && release.artifact_checksums.is_empty() {
+                " (unverified artifacts)"
+            } else {
+                ""
+            };
         println!(
-            "{:<24} {:<10} {:<12} {commit}{dirty_marker}",
+            "{:<24} {:<10} {:<12} {commit}{dirty_marker}{active_marker}{integrity_marker}",
             release.id, release.status, completed,
         );
     }
     Ok(())
+}
+
+fn validate_rollback_target(
+    paths: &Paths,
+    profile: &ResolvedProfile,
+    release_id: &str,
+) -> Result<ReleaseRecord> {
+    let release = read_release(paths, release_id)?;
+    if release.profile != profile.profile_name {
+        bail!(
+            "release '{}' belongs to profile '{}', not '{}'",
+            release.id,
+            release.profile,
+            profile.profile_name
+        );
+    }
+    if release.artifact_dir.is_none() || !release_artifact_dir(paths, release_id).is_dir() {
+        bail!("release '{release_id}' has no rollback artifacts");
+    }
+    verify_release_artifacts(paths, &release)?;
+    Ok(release)
+}
+
+fn print_rollback_plan(paths: &Paths, profile: &ResolvedProfile, release_id: &str) -> Result<()> {
+    let _ = deployment_config(profile)?;
+    let _ = validate_rollback_target(paths, profile, release_id)?;
+    let active = active_release_id(paths)?;
+    println!("Rollback plan for profile {}", profile.profile_name);
+    println!("Current release: {}", active.as_deref().unwrap_or("none"));
+    println!("Target release:  {release_id}");
+    println!("1. Ensure the managed database is ready (no migration or restore)");
+    println!("2. Stop frontend, backend, and embedding services");
+    println!("3. Atomically activate release {release_id}");
+    println!("4. Start the archived release services");
+    println!("5. Run profile smoke checks");
+    println!("6. Reactivate the previous release automatically if steps 4 or 5 fail");
+    println!("\nDry run complete; no services or data were changed.");
+    Ok(())
+}
+
+fn recover_active_release(
+    registry: &ConfigRegistry,
+    paths: &Paths,
+    profile: &ResolvedProfile,
+    release_id: &str,
+) -> Result<()> {
+    let _ = stop_application_services(paths, profile);
+    activate_release(paths, release_id)?;
+    start_release_services(registry, paths, profile, release_id)?;
+    if !run_checks(paths, profile) {
+        bail!("recovery smoke checks failed");
+    }
+    Ok(())
+}
+
+fn rollback_profile(
+    registry: &ConfigRegistry,
+    paths: &Paths,
+    profile: &ResolvedProfile,
+    release_id: &str,
+) -> Result<()> {
+    let _lock = acquire_deployment_lock(paths)?;
+    let mut target = validate_rollback_target(paths, profile, release_id)?;
+    let previous = active_release_id(paths)?
+        .ok_or_else(|| anyhow!("no active release is available for safe rollback recovery"))?;
+    if previous == release_id {
+        bail!("release '{release_id}' is already active");
+    }
+    let _ = validate_rollback_target(paths, profile, &previous)?;
+
+    ensure_db_running(registry, paths, profile)?;
+    ensure_profile_database(paths, profile)?;
+    println!(
+        "Rolling back profile {} from {} to {} (database unchanged)",
+        profile.profile_name, previous, release_id
+    );
+    stop_application_services(paths, profile)?;
+    activate_release(paths, release_id)?;
+
+    let rollback_result = (|| {
+        start_release_services(registry, paths, profile, release_id)?;
+        if !run_checks(paths, profile) {
+            bail!("rollback smoke checks failed");
+        }
+        Ok(())
+    })();
+
+    match rollback_result {
+        Ok(()) => {
+            target.activated_at = Some(Utc::now().to_rfc3339());
+            target.phases.push(ReleasePhase {
+                name: format!("rollback activation from {previous}"),
+                status: "passed".to_owned(),
+                completed_at: Utc::now().to_rfc3339(),
+                detail: Some("database unchanged".to_owned()),
+            });
+            write_release(paths, &target)?;
+            println!("\nRollback to {release_id} completed successfully.");
+            Ok(())
+        }
+        Err(rollback_error) => {
+            eprintln!(
+                "\nRollback target failed; attempting recovery with previous release {previous}..."
+            );
+            let recovery = recover_active_release(registry, paths, profile, &previous);
+            target.phases.push(ReleasePhase {
+                name: format!("rollback activation from {previous}"),
+                status: "failed".to_owned(),
+                completed_at: Utc::now().to_rfc3339(),
+                detail: Some(format!("{rollback_error:#}")),
+            });
+            write_release(paths, &target)?;
+            match recovery {
+                Ok(()) => Err(rollback_error).context(format!(
+                    "rollback to {release_id} failed; previous release {previous} was restored"
+                )),
+                Err(recovery_error) => bail!(
+                    "rollback to {release_id} failed: {rollback_error:#}; recovery of {previous} also failed: {recovery_error:#}"
+                ),
+            }
+        }
+    }
 }
 
 fn run() -> Result<ExitCode> {
@@ -2787,6 +3357,13 @@ fn run() -> Result<ExitCode> {
             }
         }
         CommandKind::Releases => list_releases(&paths)?,
+        CommandKind::Rollback { release, dry_run } => {
+            if dry_run {
+                print_rollback_plan(&paths, &profile, &release)?;
+            } else {
+                rollback_profile(&registry, &paths, &profile, &release)?;
+            }
+        }
         CommandKind::ListUsers => list_users(&paths, &profile)?,
         CommandKind::ExportContributions { username, file } => {
             export_contributions(&registry, &paths, &profile, &username, file.as_deref())?
@@ -2796,10 +3373,10 @@ fn run() -> Result<ExitCode> {
             file,
             publish,
         } => import_contributions(&registry, &paths, &profile, &username, &file, publish)?,
-        CommandKind::Start { service } => {
+        CommandKind::Start { service, source } => {
             print_profile_endpoints(&profile);
             for service in dependency_order(&profile, &service)? {
-                start_service(&registry, &paths, &profile, service)?;
+                start_configured_service(&registry, &paths, &profile, service, source)?;
                 if service == ServiceName::Db {
                     ensure_profile_database(&paths, &profile)?;
                 }
@@ -2813,14 +3390,14 @@ fn run() -> Result<ExitCode> {
                 stop_service(&paths, &profile, service)?;
             }
         }
-        CommandKind::Restart { service } => {
+        CommandKind::Restart { service, source } => {
             print_profile_endpoints(&profile);
             let order = dependency_order(&profile, &service)?;
             for service in order.iter().rev().copied() {
                 stop_service(&paths, &profile, service)?;
             }
             for service in order {
-                start_service(&registry, &paths, &profile, service)?;
+                start_configured_service(&registry, &paths, &profile, service, source)?;
                 if service == ServiceName::Db {
                     ensure_profile_database(&paths, &profile)?;
                 }
@@ -2864,6 +3441,43 @@ fn main() -> ExitCode {
 mod tests {
     use super::*;
     use std::io::Read;
+
+    fn temporary_paths(label: &str) -> Paths {
+        let state_dir = std::env::temp_dir().join(format!(
+            "rimbunctl-{label}-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_micros()
+        ));
+        let paths = Paths {
+            repo_root: state_dir.join("repo"),
+            backup_dir: state_dir.join("backups"),
+            log_dir: state_dir.join("logs"),
+            pid_dir: state_dir.join("pids"),
+            release_dir: state_dir.join("releases"),
+            state_dir,
+        };
+        fs::create_dir_all(&paths.repo_root).expect("create test repository");
+        ensure_state_dirs(&paths).expect("create test state directories");
+        paths
+    }
+
+    fn test_release(id: &str) -> ReleaseRecord {
+        ReleaseRecord {
+            format_version: 2,
+            id: id.to_owned(),
+            profile: "dev".to_owned(),
+            git_commit: "0123456789abcdef".to_owned(),
+            worktree_dirty: false,
+            started_at: Utc::now().to_rfc3339(),
+            completed_at: Some(Utc::now().to_rfc3339()),
+            status: "deployed".to_owned(),
+            backup: None,
+            artifact_dir: Some(id.to_owned()),
+            activated_at: None,
+            artifact_checksums: BTreeMap::new(),
+            phases: Vec::new(),
+        }
+    }
 
     fn serve_status(status: &str) -> (u16, thread::JoinHandle<()>) {
         let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind test listener");
@@ -2965,25 +3579,15 @@ mod tests {
         let deployment = deployment_config(&profile).expect("resolve deployment configuration");
 
         assert_eq!(deployment.build.len(), 2);
-        assert_eq!(deployment.migrate, "./target/debug/rimbun-migrate");
+        assert_eq!(deployment.migrate, "{release_dir}/bin/rimbun-migrate");
+        assert_eq!(deployment.retention, 5);
+        assert_eq!(deployment.artifacts.len(), 5);
+        assert_eq!(deployment.run.len(), 3);
     }
 
     #[test]
     fn deployment_lock_prevents_concurrent_deployments() {
-        let state_dir = std::env::temp_dir().join(format!(
-            "rimbunctl-deploy-lock-{}-{}",
-            std::process::id(),
-            Utc::now().timestamp_micros()
-        ));
-        fs::create_dir_all(&state_dir).expect("create deployment state directory");
-        let paths = Paths {
-            repo_root: state_dir.clone(),
-            backup_dir: state_dir.join("backups"),
-            log_dir: state_dir.join("logs"),
-            pid_dir: state_dir.join("pids"),
-            release_dir: state_dir.join("releases"),
-            state_dir: state_dir.clone(),
-        };
+        let paths = temporary_paths("deploy-lock");
 
         let first = acquire_deployment_lock(&paths).expect("acquire first deployment lock");
         assert!(acquire_deployment_lock(&paths).is_err());
@@ -2991,7 +3595,142 @@ mod tests {
         let second = acquire_deployment_lock(&paths).expect("reacquire deployment lock");
         drop(second);
 
-        fs::remove_dir_all(state_dir).expect("remove deployment state directory");
+        fs::remove_dir_all(&paths.state_dir).expect("remove deployment state directory");
+    }
+
+    #[test]
+    fn rollback_command_accepts_release_and_dry_run() {
+        let cli = Cli::try_parse_from([
+            "rimbunctl",
+            "dev",
+            "rollback",
+            "20260821-120000-001",
+            "--dry-run",
+        ])
+        .expect("parse rollback command");
+
+        assert!(matches!(
+            cli.command,
+            CommandKind::Rollback {
+                release,
+                dry_run: true
+            } if release == "20260821-120000-001"
+        ));
+    }
+
+    #[test]
+    fn release_activation_atomically_switches_current_symlink() {
+        let paths = temporary_paths("activate-release");
+        let first = "20260821-120000-001";
+        let second = "20260821-120001-002";
+        fs::create_dir_all(release_artifact_dir(&paths, first)).expect("create first release");
+        fs::create_dir_all(release_artifact_dir(&paths, second)).expect("create second release");
+
+        activate_release(&paths, first).expect("activate first release");
+        assert_eq!(
+            active_release_id(&paths)
+                .expect("read active release")
+                .as_deref(),
+            Some(first)
+        );
+        activate_release(&paths, second).expect("activate second release");
+        assert_eq!(
+            active_release_id(&paths)
+                .expect("read active release")
+                .as_deref(),
+            Some(second)
+        );
+
+        fs::remove_dir_all(&paths.state_dir).expect("remove activation test directory");
+    }
+
+    #[test]
+    fn archive_release_copies_binaries_and_frontend() {
+        let paths = temporary_paths("archive-release");
+        for (path, contents) in [
+            ("target/debug/rimbun-api", b"api".as_slice()),
+            (
+                "target/debug/rimbun-embedding-service",
+                b"embedding".as_slice(),
+            ),
+            ("target/debug/rimbun-migrate", b"migrate".as_slice()),
+            ("target/debug/rimbun-static-server", b"static".as_slice()),
+            ("web/dist/index.html", b"html".as_slice()),
+        ] {
+            let path = paths.repo_root.join(path);
+            fs::create_dir_all(path.parent().expect("test artifact parent"))
+                .expect("create test artifact parent");
+            fs::write(path, contents).expect("write test artifact");
+        }
+        let deployment = ResolvedDeploymentConfig {
+            artifacts: BTreeMap::from([
+                ("backend".to_owned(), "target/debug/rimbun-api".to_owned()),
+                (
+                    "embedding".to_owned(),
+                    "target/debug/rimbun-embedding-service".to_owned(),
+                ),
+                (
+                    "migrate".to_owned(),
+                    "target/debug/rimbun-migrate".to_owned(),
+                ),
+                (
+                    "static".to_owned(),
+                    "target/debug/rimbun-static-server".to_owned(),
+                ),
+                ("frontend".to_owned(), "web/dist".to_owned()),
+            ]),
+            ..ResolvedDeploymentConfig::default()
+        };
+        let release_id = "20260821-120000-001";
+
+        let archived = archive_release_artifacts(&paths, &deployment, release_id)
+            .expect("archive release artifacts");
+
+        assert_eq!(
+            fs::read(archived.join("bin/rimbun-api")).expect("read archived API"),
+            b"api"
+        );
+        assert_eq!(
+            fs::read(archived.join("web/index.html")).expect("read archived frontend"),
+            b"html"
+        );
+        let mut release = test_release(release_id);
+        release.artifact_checksums = artifact_checksums(&archived).expect("hash artifacts");
+        verify_release_artifacts(&paths, &release).expect("verify archived artifacts");
+        fs::write(archived.join("web/index.html"), b"changed").expect("alter archived frontend");
+        assert!(verify_release_artifacts(&paths, &release).is_err());
+        assert!(
+            !paths
+                .release_dir
+                .join(format!(".{release_id}.staging"))
+                .exists()
+        );
+        fs::remove_dir_all(&paths.state_dir).expect("remove archive test directory");
+    }
+
+    #[test]
+    fn retention_keeps_newest_releases_and_older_active_release() {
+        let paths = temporary_paths("release-retention");
+        let releases = [
+            "20260821-120000-001",
+            "20260821-120001-002",
+            "20260821-120002-003",
+            "20260821-120003-004",
+        ];
+        for release_id in releases {
+            fs::create_dir_all(release_artifact_dir(&paths, release_id))
+                .expect("create release artifacts");
+            write_release(&paths, &test_release(release_id)).expect("write release record");
+        }
+        activate_release(&paths, releases[0]).expect("activate oldest release");
+
+        prune_releases(&paths, 2).expect("prune old releases");
+
+        assert!(release_artifact_dir(&paths, releases[0]).exists());
+        assert!(!release_artifact_dir(&paths, releases[1]).exists());
+        assert!(release_artifact_dir(&paths, releases[2]).exists());
+        assert!(release_artifact_dir(&paths, releases[3]).exists());
+        fs::remove_dir_all(&paths.state_dir).expect("remove retention test directory");
     }
 
     #[test]
