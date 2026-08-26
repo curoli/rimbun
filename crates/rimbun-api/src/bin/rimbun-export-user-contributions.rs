@@ -32,6 +32,8 @@ struct ExportEntry {
     document_slug: String,
     document_title: String,
     section_id: Uuid,
+    section_number: String,
+    section_breadcrumb: Vec<String>,
     section_path: String,
     section_title: String,
     has_heading: bool,
@@ -77,11 +79,35 @@ struct PreferenceRow {
     preferred_base_submission_id: Uuid,
 }
 
+#[derive(Debug, Clone, FromRow)]
+struct SectionMeta {
+    id: Uuid,
+    document_id: Uuid,
+    parent_id: Option<Uuid>,
+    title: String,
+    position: i32,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+struct EntrySection {
+    document_slug: String,
+    document_title: String,
+    section_id: Uuid,
+    section_number: String,
+    section_breadcrumb: Vec<String>,
+    section_path: String,
+    section_title: String,
+    has_heading: bool,
+}
+
 #[derive(Debug, Clone)]
 struct EntryBuilder {
     document_slug: String,
     document_title: String,
     section_id: Uuid,
+    section_number: String,
+    section_breadcrumb: Vec<String>,
     section_path: String,
     section_title: String,
     has_heading: bool,
@@ -96,21 +122,16 @@ struct EntryBuilder {
 }
 
 impl EntryBuilder {
-    fn new(
-        document_slug: String,
-        document_title: String,
-        section_id: Uuid,
-        section_path: String,
-        section_title: String,
-        has_heading: bool,
-    ) -> Self {
+    fn new(section: EntrySection) -> Self {
         Self {
-            document_slug,
-            document_title,
-            section_id,
-            section_path,
-            section_title,
-            has_heading,
+            document_slug: section.document_slug,
+            document_title: section.document_title,
+            section_id: section.section_id,
+            section_number: section.section_number,
+            section_breadcrumb: section.section_breadcrumb,
+            section_path: section.section_path,
+            section_title: section.section_title,
+            has_heading: section.has_heading,
             draft_source: "empty".to_owned(),
             base_submission_id: None,
             draft_markdown: String::new(),
@@ -127,6 +148,8 @@ impl EntryBuilder {
             document_slug: self.document_slug,
             document_title: self.document_title,
             section_id: self.section_id,
+            section_number: self.section_number,
+            section_breadcrumb: self.section_breadcrumb,
             section_path: self.section_path,
             section_title: self.section_title,
             has_heading: self.has_heading,
@@ -148,11 +171,11 @@ fn usage() {
     );
 }
 
-fn title_path_for_section(
+fn breadcrumb_for_section(
     section_id: Uuid,
     parents: &HashMap<Uuid, Option<Uuid>>,
     titles: &HashMap<Uuid, String>,
-) -> String {
+) -> Vec<String> {
     let mut cursor = Some(section_id);
     let mut parts = Vec::new();
 
@@ -166,7 +189,178 @@ fn title_path_for_section(
     }
 
     parts.reverse();
-    parts.join(" / ")
+    parts
+}
+
+fn section_numbers(sections: &[SectionMeta]) -> HashMap<Uuid, String> {
+    let mut roots = HashMap::<Uuid, Vec<&SectionMeta>>::new();
+    let mut children = HashMap::<Uuid, Vec<&SectionMeta>>::new();
+
+    for section in sections {
+        if let Some(parent_id) = section.parent_id {
+            children.entry(parent_id).or_default().push(section);
+        } else {
+            roots.entry(section.document_id).or_default().push(section);
+        }
+    }
+
+    let sort_sections = |group: &mut Vec<&SectionMeta>| {
+        group.sort_by(|left, right| {
+            left.position
+                .cmp(&right.position)
+                .then(left.created_at.cmp(&right.created_at))
+        });
+    };
+    for group in roots.values_mut() {
+        sort_sections(group);
+    }
+    for group in children.values_mut() {
+        sort_sections(group);
+    }
+
+    fn visit(
+        siblings: &[&SectionMeta],
+        children: &HashMap<Uuid, Vec<&SectionMeta>>,
+        prefix: &mut Vec<usize>,
+        numbers: &mut HashMap<Uuid, String>,
+    ) {
+        for (index, section) in siblings.iter().enumerate() {
+            prefix.push(index + 1);
+            numbers.insert(
+                section.id,
+                prefix
+                    .iter()
+                    .map(|part| part.to_string())
+                    .collect::<Vec<_>>()
+                    .join("."),
+            );
+            if let Some(descendants) = children.get(&section.id) {
+                visit(descendants, children, prefix, numbers);
+            }
+            prefix.pop();
+        }
+    }
+
+    let mut numbers = HashMap::new();
+    for root_sections in roots.values() {
+        visit(root_sections, &children, &mut Vec::new(), &mut numbers);
+    }
+    numbers
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn section(
+        id: Uuid,
+        document_id: Uuid,
+        parent_id: Option<Uuid>,
+        title: &str,
+        position: i32,
+        created_at: &str,
+    ) -> SectionMeta {
+        SectionMeta {
+            id,
+            document_id,
+            parent_id,
+            title: title.to_owned(),
+            position,
+            created_at: created_at.parse().expect("valid test timestamp"),
+        }
+    }
+
+    #[test]
+    fn section_numbers_match_reader_hierarchy_and_ordering() {
+        let document_id = Uuid::new_v4();
+        let first = Uuid::new_v4();
+        let second = Uuid::new_v4();
+        let first_child = Uuid::new_v4();
+        let second_child = Uuid::new_v4();
+        let sections = vec![
+            section(
+                second_child,
+                document_id,
+                Some(first),
+                "Second child",
+                1,
+                "2026-01-01T00:00:04Z",
+            ),
+            section(
+                second,
+                document_id,
+                None,
+                "Second",
+                1,
+                "2026-01-01T00:00:02Z",
+            ),
+            section(
+                first_child,
+                document_id,
+                Some(first),
+                "First child",
+                0,
+                "2026-01-01T00:00:03Z",
+            ),
+            section(first, document_id, None, "First", 0, "2026-01-01T00:00:01Z"),
+        ];
+
+        let numbers = section_numbers(&sections);
+
+        assert_eq!(numbers.get(&first).map(String::as_str), Some("1"));
+        assert_eq!(numbers.get(&first_child).map(String::as_str), Some("1.1"));
+        assert_eq!(numbers.get(&second_child).map(String::as_str), Some("1.2"));
+        assert_eq!(numbers.get(&second).map(String::as_str), Some("2"));
+    }
+
+    #[test]
+    fn root_numbering_is_independent_per_document() {
+        let first_document = Uuid::new_v4();
+        let second_document = Uuid::new_v4();
+        let first_section = Uuid::new_v4();
+        let second_section = Uuid::new_v4();
+        let sections = vec![
+            section(
+                first_section,
+                first_document,
+                None,
+                "First document",
+                0,
+                "2026-01-01T00:00:01Z",
+            ),
+            section(
+                second_section,
+                second_document,
+                None,
+                "Second document",
+                0,
+                "2026-01-01T00:00:02Z",
+            ),
+        ];
+
+        let numbers = section_numbers(&sections);
+
+        assert_eq!(numbers.get(&first_section).map(String::as_str), Some("1"));
+        assert_eq!(numbers.get(&second_section).map(String::as_str), Some("1"));
+    }
+
+    #[test]
+    fn breadcrumb_contains_all_non_empty_ancestor_titles() {
+        let root = Uuid::new_v4();
+        let untitled = Uuid::new_v4();
+        let leaf = Uuid::new_v4();
+        let parents = HashMap::from([(root, None), (untitled, Some(root)), (leaf, Some(untitled))]);
+        let titles = HashMap::from([
+            (root, "Book".to_owned()),
+            (untitled, String::new()),
+            (leaf, "Chapter".to_owned()),
+        ]);
+
+        assert_eq!(
+            breadcrumb_for_section(leaf, &parents, &titles),
+            vec!["Book", "Chapter"]
+        );
+    }
 }
 
 #[tokio::main]
@@ -306,9 +500,9 @@ async fn main() -> ExitCode {
         }
     };
 
-    let section_meta_rows = match sqlx::query_as::<_, (Uuid, Option<Uuid>, String)>(
+    let section_meta_rows = match sqlx::query_as::<_, SectionMeta>(
         r#"
-        select id, parent_id, title
+        select id, document_id, parent_id, title, position, created_at
         from sections
         "#,
     )
@@ -324,10 +518,11 @@ async fn main() -> ExitCode {
 
     let mut parents = HashMap::new();
     let mut titles = HashMap::new();
-    for (id, parent_id, title) in section_meta_rows {
-        parents.insert(id, parent_id);
-        titles.insert(id, title);
+    for section in &section_meta_rows {
+        parents.insert(section.id, section.parent_id);
+        titles.insert(section.id, section.title.clone());
     }
+    let section_numbers = section_numbers(&section_meta_rows);
 
     let preference_map: HashMap<Uuid, Uuid> = preferences
         .into_iter()
@@ -337,21 +532,27 @@ async fn main() -> ExitCode {
     let mut entries = BTreeMap::<(String, String, Uuid), EntryBuilder>::new();
 
     for row in active_submissions {
+        let section_breadcrumb = breadcrumb_for_section(row.section_id, &parents, &titles);
+        let section_path = section_breadcrumb.join(" / ");
         let key = (
             row.document_slug.clone(),
-            title_path_for_section(row.section_id, &parents, &titles),
+            section_path.clone(),
             row.section_id,
         );
-        let section_path = title_path_for_section(row.section_id, &parents, &titles);
         let entry = entries.entry(key).or_insert_with(|| {
-            EntryBuilder::new(
-                row.document_slug.clone(),
-                row.document_title.clone(),
-                row.section_id,
+            EntryBuilder::new(EntrySection {
+                document_slug: row.document_slug.clone(),
+                document_title: row.document_title.clone(),
+                section_id: row.section_id,
+                section_number: section_numbers
+                    .get(&row.section_id)
+                    .cloned()
+                    .unwrap_or_default(),
+                section_breadcrumb,
                 section_path,
-                row.section_title.clone(),
-                row.has_heading,
-            )
+                section_title: row.section_title.clone(),
+                has_heading: row.has_heading,
+            })
         });
 
         entry.published_submission_id = Some(row.submission_id);
@@ -368,21 +569,27 @@ async fn main() -> ExitCode {
     }
 
     for row in drafts {
+        let section_breadcrumb = breadcrumb_for_section(row.section_id, &parents, &titles);
+        let section_path = section_breadcrumb.join(" / ");
         let key = (
             row.document_slug.clone(),
-            title_path_for_section(row.section_id, &parents, &titles),
+            section_path.clone(),
             row.section_id,
         );
-        let section_path = title_path_for_section(row.section_id, &parents, &titles);
         let entry = entries.entry(key).or_insert_with(|| {
-            EntryBuilder::new(
-                row.document_slug.clone(),
-                row.document_title.clone(),
-                row.section_id,
+            EntryBuilder::new(EntrySection {
+                document_slug: row.document_slug.clone(),
+                document_title: row.document_title.clone(),
+                section_id: row.section_id,
+                section_number: section_numbers
+                    .get(&row.section_id)
+                    .cloned()
+                    .unwrap_or_default(),
+                section_breadcrumb,
                 section_path,
-                row.section_title.clone(),
-                row.has_heading,
-            )
+                section_title: row.section_title.clone(),
+                has_heading: row.has_heading,
+            })
         });
 
         entry.draft_source = "draft".to_owned();

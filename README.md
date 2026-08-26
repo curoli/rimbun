@@ -145,6 +145,9 @@ Available commands:
 ./rimbunctl dev backup [name]
 ./rimbunctl dev verify-backup <backup-file>
 ./rimbunctl dev restore <backup-file>
+./rimbunctl dev list-users
+./rimbunctl dev export-contributions <username> [output-file]
+./rimbunctl dev import-contributions <username> <input-file> [--publish]
 ./rimbunctl dev set-role <username> <role>
 ./rimbunctl dev set-password <username> <new-password>
 ```
@@ -187,6 +190,22 @@ Examples:
 ./rimbunctl dev set-role curoli admin
 ./rimbunctl dev set-password curoli 'new secure password'
 ```
+
+### AI-assisted contributions
+
+Export a user's current contribution workspace as human-readable TOML, edit selected
+`draft_markdown` and optional `draft_main_comment_markdown` values, and import it again:
+
+```bash
+./rimbunctl dev export-contributions jati jati.toml
+./rimbunctl dev import-contributions jati jati.toml
+./rimbunctl dev import-contributions jati jati.toml --publish
+```
+
+Each entry includes the stable `section_id`, its reader-style `section_number` such as `1.2.3`,
+the current `section_title`, and a structured `section_breadcrumb` containing all non-empty
+ancestor titles. Imports only change sections whose `[[entries]]` blocks remain in the input
+file. Without `--publish`, imported contributions remain drafts for review.
 
 `rimbunctl` is implemented as a Rust CLI with a thin launcher script at the repository root.
 For `start` and `restart`, it waits until every requested service actually responds before
