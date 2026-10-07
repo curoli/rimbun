@@ -130,6 +130,14 @@ pub async fn update(
 }
 
 pub async fn delete_by_id(pool: &PgPool, id: uuid::Uuid) -> anyhow::Result<bool> {
+    let mut tx = pool.begin().await?;
+    let section_ids =
+        sqlx::query_scalar::<_, uuid::Uuid>("select id from sections where document_id = $1")
+            .bind(id)
+            .fetch_all(&mut *tx)
+            .await?;
+    crate::db::sections::lock_many_for_update(&mut tx, &section_ids).await?;
+
     let result = sqlx::query(
         r#"
         delete from documents
@@ -137,8 +145,10 @@ pub async fn delete_by_id(pool: &PgPool, id: uuid::Uuid) -> anyhow::Result<bool>
         "#,
     )
     .bind(id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+
+    tx.commit().await?;
 
     Ok(result.rows_affected() > 0)
 }

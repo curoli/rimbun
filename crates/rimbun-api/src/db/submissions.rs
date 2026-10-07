@@ -25,10 +25,68 @@ pub struct NewSubmission {
     pub markdown_content: String,
 }
 
+#[derive(Debug, Clone, FromRow)]
+pub struct ReferenceSubmission {
+    pub section_id: uuid::Uuid,
+    pub submission_id: uuid::Uuid,
+    pub markdown_content: String,
+}
+
+async fn current_references_with_executor<'e, E>(
+    executor: E,
+    section_ids: &[uuid::Uuid],
+) -> anyhow::Result<Vec<ReferenceSubmission>>
+where
+    E: sqlx::Executor<'e, Database = Postgres>,
+{
+    let records = sqlx::query_as::<_, ReferenceSubmission>(
+        r#"
+        select distinct on (s.section_id)
+          s.section_id,
+          s.id as submission_id,
+          s.markdown_content
+        from submissions s
+        left join section_projection_items spi
+          on spi.section_id = s.section_id
+         and spi.submission_id = s.id
+        left join submission_moderation sm on sm.submission_id = s.id
+        where s.section_id = any($1)
+          and s.superseded_by is null
+          and coalesce(sm.soft_deleted, false) = false
+          and coalesce(sm.hidden, false) = false
+        order by
+          s.section_id,
+          case when spi.role = 'main' then 0 when spi.submission_id is not null then 1 else 2 end,
+          spi.rank asc nulls last,
+          s.published_at desc
+        "#,
+    )
+    .bind(section_ids)
+    .fetch_all(executor)
+    .await?;
+
+    Ok(records)
+}
+
+pub async fn current_references(
+    pool: &PgPool,
+    section_ids: &[uuid::Uuid],
+) -> anyhow::Result<Vec<ReferenceSubmission>> {
+    current_references_with_executor(pool, section_ids).await
+}
+
+pub async fn current_references_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    section_ids: &[uuid::Uuid],
+) -> anyhow::Result<Vec<ReferenceSubmission>> {
+    current_references_with_executor(&mut **tx, section_ids).await
+}
+
 pub async fn create(
     tx: &mut Transaction<'_, Postgres>,
     submission: &NewSubmission,
 ) -> anyhow::Result<SubmissionRecord> {
+    crate::db::sections::lock_for_update(tx, submission.section_id).await?;
     let record = sqlx::query_as::<_, SubmissionRecord>(
         r#"
         insert into submissions (id, section_id, user_id, base_submission_id, markdown_content, status)
@@ -179,10 +237,27 @@ pub async fn list_active_visible_by_section(
     Ok(records)
 }
 
+pub async fn list_active_clusterable_visible_by_section_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    section_id: uuid::Uuid,
+) -> anyhow::Result<Vec<SubmissionRecord>> {
+    list_active_clusterable_visible_with_executor(&mut **tx, section_id).await
+}
+
 pub async fn list_active_clusterable_visible_by_section(
     pool: &PgPool,
     section_id: uuid::Uuid,
 ) -> anyhow::Result<Vec<SubmissionRecord>> {
+    list_active_clusterable_visible_with_executor(pool, section_id).await
+}
+
+async fn list_active_clusterable_visible_with_executor<'e, E>(
+    executor: E,
+    section_id: uuid::Uuid,
+) -> anyhow::Result<Vec<SubmissionRecord>>
+where
+    E: sqlx::Executor<'e, Database = Postgres>,
+{
     let records = sqlx::query_as::<_, SubmissionRecord>(
         r#"
         select
@@ -208,7 +283,7 @@ pub async fn list_active_clusterable_visible_by_section(
         "#,
     )
     .bind(section_id)
-    .fetch_all(pool)
+    .fetch_all(executor)
     .await?;
 
     Ok(records)

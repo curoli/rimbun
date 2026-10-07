@@ -145,8 +145,13 @@ pub async fn delete(
         ));
     }
 
-    moderation::upsert(
-        &state.pool,
+    let mut tx = state
+        .pool
+        .begin()
+        .await
+        .map_err(|err| ApiError::internal(err.to_string()))?;
+    moderation::upsert_in_tx(
+        &mut tx,
         &moderation::UpsertModeration {
             submission_id,
             hidden: false,
@@ -162,6 +167,10 @@ pub async fn delete(
     )
     .await
     .map_err(|err| ApiError::internal(err.to_string()))?;
+
+    tx.commit()
+        .await
+        .map_err(|err| ApiError::internal(err.to_string()))?;
 
     projections::rebuild_trivial_for_section(
         &state.pool,

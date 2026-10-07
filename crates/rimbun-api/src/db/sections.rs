@@ -2,6 +2,42 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::{FromRow, PgPool, Postgres, Transaction};
 
+pub async fn lock_for_update(
+    tx: &mut Transaction<'_, Postgres>,
+    section_id: uuid::Uuid,
+) -> anyhow::Result<()> {
+    let locked =
+        sqlx::query_scalar::<_, uuid::Uuid>("select id from sections where id = $1 for update")
+            .bind(section_id)
+            .fetch_optional(&mut **tx)
+            .await?;
+
+    anyhow::ensure!(locked.is_some(), "section {section_id} not found");
+    Ok(())
+}
+
+pub async fn lock_many_for_update(
+    tx: &mut Transaction<'_, Postgres>,
+    section_ids: &[uuid::Uuid],
+) -> anyhow::Result<()> {
+    let mut expected = section_ids.to_vec();
+    expected.sort_unstable();
+    expected.dedup();
+
+    let locked = sqlx::query_scalar::<_, uuid::Uuid>(
+        "select id from sections where id = any($1) order by id for update",
+    )
+    .bind(&expected)
+    .fetch_all(&mut **tx)
+    .await?;
+
+    anyhow::ensure!(
+        locked == expected,
+        "one or more sections disappeared while acquiring import locks"
+    );
+    Ok(())
+}
+
 fn normalized_order<T: Copy + PartialEq>(
     items: Vec<T>,
     moved_item: Option<T>,
@@ -216,103 +252,111 @@ pub async fn move_section(
     parent_id: Option<uuid::Uuid>,
     position: i32,
 ) -> anyhow::Result<Option<SectionRecord>> {
-    let mut tx = pool.begin().await?;
+    for _ in 0..5 {
+        let mut tx = pool.begin().await?;
+        let Some(discovered) = discover_move(&mut tx, section_id, parent_id).await? else {
+            tx.rollback().await?;
+            return Ok(None);
+        };
+        lock_many_for_update(&mut tx, &discovered.affected_ids).await?;
 
-    let current = sqlx::query_as::<_, SectionRecord>(
-        r#"
-        select id, document_id, parent_id, title, has_heading, has_own_text, position, path, created_at
-        from sections
-        where id = $1
-        "#,
-    )
-    .bind(section_id)
-    .fetch_optional(&mut *tx)
-    .await?;
+        let Some(current) = discover_move(&mut tx, section_id, parent_id).await? else {
+            tx.rollback().await?;
+            return Ok(None);
+        };
+        if current.current.path != discovered.current.path
+            || current.current.parent_id != discovered.current.parent_id
+            || current.new_path != discovered.new_path
+            || current.affected_ids != discovered.affected_ids
+        {
+            tx.rollback().await?;
+            continue;
+        }
 
-    let Some(current) = current else {
-        tx.rollback().await?;
-        return Ok(None);
-    };
+        let old_parent_id = current.current.parent_id;
+        let old_path = current.current.path.clone();
 
-    let old_parent_id = current.parent_id;
-    let old_path = current.path.clone();
-    let new_path = if let Some(parent_id) = parent_id {
-        let parent = sqlx::query_as::<_, SectionRecord>(
+        // Park the moved section in a temporary negative slot first so that moving
+        // into an occupied sibling position cannot violate the unique index.
+        let temporary_position = -1_000_000_000;
+
+        sqlx::query_as::<_, SectionRecord>(
             r#"
-            select id, document_id, parent_id, title, has_heading, has_own_text, position, path, created_at
-            from sections
+            update sections
+            set title = $2, has_heading = $3, has_own_text = $4, parent_id = $5, position = $6, path = $7
             where id = $1
+            returning id, document_id, parent_id, title, has_heading, has_own_text, position, path, created_at
             "#,
         )
+        .bind(section_id)
+        .bind(title)
+        .bind(has_heading)
+        .bind(has_own_text)
         .bind(parent_id)
+        .bind(temporary_position)
+        .bind(&current.new_path)
         .fetch_one(&mut *tx)
         .await?;
 
-        format!("{}/{}", parent.path, section_id)
-    } else {
-        section_id.to_string()
-    };
+        if old_path != current.new_path {
+            let suffix_start = old_path.len() as i32 + 1;
+            sqlx::query(
+                r#"
+                update sections
+                set path = $2 || substring(path from $3)
+                where path like $1 || '/%'
+                "#,
+            )
+            .bind(&old_path)
+            .bind(&current.new_path)
+            .bind(suffix_start)
+            .execute(&mut *tx)
+            .await?;
+        }
 
-    // Park the moved section in a temporary negative slot first so that moving
-    // into an occupied sibling position cannot violate the unique index.
-    let temporary_position = -1_000_000_000;
+        if old_parent_id != parent_id {
+            normalize_group_positions(
+                &mut tx,
+                current.current.document_id,
+                old_parent_id,
+                None,
+                None,
+            )
+            .await?;
+            normalize_group_positions(
+                &mut tx,
+                current.current.document_id,
+                parent_id,
+                Some(section_id),
+                Some(position),
+            )
+            .await?;
+        } else {
+            normalize_group_positions(
+                &mut tx,
+                current.current.document_id,
+                parent_id,
+                Some(section_id),
+                Some(position),
+            )
+            .await?;
+        }
 
-    sqlx::query_as::<_, SectionRecord>(
-        r#"
-        update sections
-        set title = $2, has_heading = $3, has_own_text = $4, parent_id = $5, position = $6, path = $7
-        where id = $1
-        returning id, document_id, parent_id, title, has_heading, has_own_text, position, path, created_at
-        "#,
-    )
-    .bind(section_id)
-    .bind(title)
-    .bind(has_heading)
-    .bind(has_own_text)
-    .bind(parent_id)
-    .bind(temporary_position)
-    .bind(&new_path)
-    .fetch_one(&mut *tx)
-    .await?;
-
-    if old_path != new_path {
-        let suffix_start = old_path.len() as i32 + 1;
-        sqlx::query(
-            r#"
-            update sections
-            set path = $2 || substring(path from $3)
-            where path like $1 || '/%'
-            "#,
-        )
-        .bind(&old_path)
-        .bind(&new_path)
-        .bind(suffix_start)
-        .execute(&mut *tx)
-        .await?;
+        let record = find_by_id_in_tx(&mut tx, section_id)
+            .await?
+            .expect("moved section still exists");
+        tx.commit().await?;
+        return Ok(Some(record));
     }
 
-    if old_parent_id != parent_id {
-        normalize_group_positions(&mut tx, current.document_id, old_parent_id, None, None).await?;
-        normalize_group_positions(
-            &mut tx,
-            current.document_id,
-            parent_id,
-            Some(section_id),
-            Some(position),
-        )
-        .await?;
-    } else {
-        normalize_group_positions(
-            &mut tx,
-            current.document_id,
-            parent_id,
-            Some(section_id),
-            Some(position),
-        )
-        .await?;
-    }
+    anyhow::bail!("section hierarchy changed repeatedly while move was acquiring locks")
+}
 
-    let record = sqlx::query_as::<_, SectionRecord>(
+async fn find_by_id_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    section_id: uuid::Uuid,
+) -> anyhow::Result<Option<SectionRecord>> {
+    Ok(sqlx::query_as::<_, SectionRecord>(
         r#"
         select id, document_id, parent_id, title, has_heading, has_own_text, position, path, created_at
         from sections
@@ -320,73 +364,167 @@ pub async fn move_section(
         "#,
     )
     .bind(section_id)
-    .fetch_one(&mut *tx)
-    .await?;
+    .fetch_optional(&mut **tx)
+    .await?)
+}
 
-    tx.commit().await?;
-    Ok(Some(record))
+async fn subtree_ids_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    path: &str,
+) -> anyhow::Result<Vec<uuid::Uuid>> {
+    Ok(sqlx::query_scalar::<_, uuid::Uuid>(
+        "select id from sections where path = $1 or path like $1 || '/%'",
+    )
+    .bind(path)
+    .fetch_all(&mut **tx)
+    .await?)
+}
+
+async fn group_ids_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    document_id: uuid::Uuid,
+    parent_id: Option<uuid::Uuid>,
+) -> anyhow::Result<Vec<uuid::Uuid>> {
+    Ok(list_group_sections(tx, document_id, parent_id)
+        .await?
+        .into_iter()
+        .map(|section| section.id)
+        .collect())
+}
+
+struct MoveSnapshot {
+    current: SectionRecord,
+    new_path: String,
+    affected_ids: Vec<uuid::Uuid>,
+}
+
+async fn discover_move(
+    tx: &mut Transaction<'_, Postgres>,
+    section_id: uuid::Uuid,
+    parent_id: Option<uuid::Uuid>,
+) -> anyhow::Result<Option<MoveSnapshot>> {
+    let Some(current) = find_by_id_in_tx(tx, section_id).await? else {
+        return Ok(None);
+    };
+    let parent = if let Some(parent_id) = parent_id {
+        let parent = find_by_id_in_tx(tx, parent_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("parent section not found"))?;
+        anyhow::ensure!(
+            parent.document_id == current.document_id,
+            "parent section belongs to another document"
+        );
+        anyhow::ensure!(
+            parent.path != current.path && !parent.path.starts_with(&(current.path.clone() + "/")),
+            "a section cannot move into its own subtree"
+        );
+        Some(parent)
+    } else {
+        None
+    };
+    let new_path = parent
+        .as_ref()
+        .map(|parent| format!("{}/{}", parent.path, section_id))
+        .unwrap_or_else(|| section_id.to_string());
+
+    let mut affected_ids = subtree_ids_in_tx(tx, &current.path).await?;
+    affected_ids.extend(group_ids_in_tx(tx, current.document_id, current.parent_id).await?);
+    affected_ids.extend(group_ids_in_tx(tx, current.document_id, parent_id).await?);
+    if let Some(parent) = parent {
+        affected_ids.push(parent.id);
+    }
+    affected_ids.sort_unstable();
+    affected_ids.dedup();
+
+    Ok(Some(MoveSnapshot {
+        current,
+        new_path,
+        affected_ids,
+    }))
 }
 
 pub async fn delete_subtree(pool: &PgPool, section_id: uuid::Uuid) -> anyhow::Result<bool> {
-    let mut tx = pool.begin().await?;
-    let current = sqlx::query_as::<_, SectionRecord>(
-        r#"
-        select id, document_id, parent_id, title, has_heading, has_own_text, position, path, created_at
-        from sections
-        where id = $1
-        for update
-        "#,
-    )
-    .bind(section_id)
-    .fetch_optional(&mut *tx)
-    .await?;
+    for _ in 0..5 {
+        let mut tx = pool.begin().await?;
+        let Some(discovered) = find_by_id_in_tx(&mut tx, section_id).await? else {
+            tx.rollback().await?;
+            return Ok(false);
+        };
 
-    let Some(current) = current else {
-        tx.rollback().await?;
-        return Ok(false);
-    };
+        let mut discovered_subtree_ids = subtree_ids_in_tx(&mut tx, &discovered.path).await?;
+        discovered_subtree_ids.sort_unstable();
+        let mut discovered_affected_ids = discovered_subtree_ids.clone();
+        discovered_affected_ids
+            .extend(group_ids_in_tx(&mut tx, discovered.document_id, discovered.parent_id).await?);
+        discovered_affected_ids.sort_unstable();
+        discovered_affected_ids.dedup();
+        lock_many_for_update(&mut tx, &discovered_affected_ids).await?;
 
-    let subtree_submission_ids = r#"
-        select submission.id
-        from submissions submission
-        join sections section on section.id = submission.section_id
-        where section.path = $1 or section.path like $1 || '/%'
-    "#;
+        let Some(current) = find_by_id_in_tx(&mut tx, section_id).await? else {
+            tx.rollback().await?;
+            return Ok(false);
+        };
+        let mut locked_subtree_ids = subtree_ids_in_tx(&mut tx, &current.path).await?;
+        locked_subtree_ids.sort_unstable();
+        let mut locked_affected_ids = locked_subtree_ids.clone();
+        locked_affected_ids
+            .extend(group_ids_in_tx(&mut tx, current.document_id, current.parent_id).await?);
+        locked_affected_ids.sort_unstable();
+        locked_affected_ids.dedup();
+        if current.path != discovered.path
+            || current.parent_id != discovered.parent_id
+            || locked_subtree_ids != discovered_subtree_ids
+            || locked_affected_ids != discovered_affected_ids
+        {
+            tx.rollback().await?;
+            continue;
+        }
 
-    sqlx::query(&format!(
-        "update submissions set base_submission_id = null where base_submission_id in ({subtree_submission_ids})"
-    ))
-    .bind(&current.path)
-    .execute(&mut *tx)
-    .await?;
-    sqlx::query(&format!(
-        "update submissions set superseded_by = null where superseded_by in ({subtree_submission_ids})"
-    ))
-    .bind(&current.path)
-    .execute(&mut *tx)
-    .await?;
-    sqlx::query(&format!(
-        "update drafts set base_submission_id = null where base_submission_id in ({subtree_submission_ids})"
-    ))
-    .bind(&current.path)
-    .execute(&mut *tx)
-    .await?;
-    sqlx::query(&format!(
-        "delete from user_section_preferences where preferred_base_submission_id in ({subtree_submission_ids})"
-    ))
-    .bind(&current.path)
-    .execute(&mut *tx)
-    .await?;
+        let subtree_submission_ids = r#"
+            select submission.id
+            from submissions submission
+            join sections section on section.id = submission.section_id
+            where section.path = $1 or section.path like $1 || '/%'
+        "#;
 
-    sqlx::query("delete from sections where id = $1")
-        .bind(section_id)
+        sqlx::query(&format!(
+            "update submissions set base_submission_id = null where base_submission_id in ({subtree_submission_ids})"
+        ))
+        .bind(&current.path)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(&format!(
+            "update submissions set superseded_by = null where superseded_by in ({subtree_submission_ids})"
+        ))
+        .bind(&current.path)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(&format!(
+            "update drafts set base_submission_id = null where base_submission_id in ({subtree_submission_ids})"
+        ))
+        .bind(&current.path)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(&format!(
+            "delete from user_section_preferences where preferred_base_submission_id in ({subtree_submission_ids})"
+        ))
+        .bind(&current.path)
         .execute(&mut *tx)
         .await?;
 
-    normalize_group_positions(&mut tx, current.document_id, current.parent_id, None, None).await?;
+        sqlx::query("delete from sections where id = $1")
+            .bind(section_id)
+            .execute(&mut *tx)
+            .await?;
 
-    tx.commit().await?;
-    Ok(true)
+        normalize_group_positions(&mut tx, current.document_id, current.parent_id, None, None)
+            .await?;
+
+        tx.commit().await?;
+        return Ok(true);
+    }
+
+    anyhow::bail!("section subtree changed repeatedly while deletion was acquiring locks")
 }
 
 #[cfg(test)]
