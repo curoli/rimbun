@@ -5,8 +5,9 @@ use axum::{
 use rimbun_api::{
     app,
     config::Config,
-    db::{sections, submissions},
+    db::{projections, sections, submissions},
 };
+use rimbun_embedding_client::EmbeddingClient;
 use serde_json::json;
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use tower::util::ServiceExt;
@@ -2047,4 +2048,186 @@ async fn repeatable_read_export_keeps_draft_and_reference_in_one_snapshot() {
     );
     assert_eq!(references[0].submission_id, old_reference);
     export_tx.commit().await.expect("complete export snapshot");
+}
+
+#[tokio::test]
+async fn concurrent_projection_rebuilds_do_not_exhaust_a_small_pool() {
+    let Ok(database_url) = std::env::var("TEST_DATABASE_URL") else {
+        if std::env::var_os("RIMBUN_REQUIRE_TEST_DATABASE").is_some() {
+            panic!("TEST_DATABASE_URL is required");
+        }
+        eprintln!("Skipping integration test: TEST_DATABASE_URL not set");
+        return;
+    };
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .acquire_timeout(std::time::Duration::from_millis(500))
+        .connect(&database_url)
+        .await
+        .expect("connect small test pool");
+    reset_schema(&pool).await;
+    let (user_id, _) = seed_user_with_role(&pool, "normal").await;
+    let (_, section_id) = seed_single_section_document(&pool, user_id).await;
+    let submission_id = uuid::Uuid::new_v4();
+    sqlx::query(
+        "insert into submissions (id, section_id, user_id, markdown_content, status) values ($1, $2, $3, 'text', 'published')",
+    )
+    .bind(submission_id)
+    .bind(section_id)
+    .bind(user_id)
+    .execute(&pool)
+    .await
+    .expect("insert submission");
+    sqlx::query(
+        "insert into submission_embeddings (submission_id, model_name, embedding) values ($1, 'test', '[1.0, 0.0]'::jsonb)",
+    )
+    .bind(submission_id)
+    .execute(&pool)
+    .await
+    .expect("insert embedding");
+
+    let client =
+        EmbeddingClient::with_timeout("http://127.0.0.1:9", std::time::Duration::from_millis(50));
+    let mut rebuilds = tokio::task::JoinSet::new();
+    for _ in 0..8 {
+        let pool = pool.clone();
+        let client = client.clone();
+        rebuilds.spawn(async move {
+            projections::rebuild_trivial_for_section(&pool, &client, section_id).await
+        });
+    }
+
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while let Some(result) = rebuilds.join_next().await {
+            result
+                .expect("rebuild task")
+                .expect("concurrent rebuild succeeds");
+        }
+    })
+    .await
+    .expect("concurrent rebuilds finish without pool timeout");
+}
+
+#[tokio::test]
+async fn stalled_embedding_request_does_not_hold_the_section_lock() {
+    let Some(pool) = test_pool().await else {
+        eprintln!("Skipping integration test: TEST_DATABASE_URL not set or unreachable");
+        return;
+    };
+    reset_schema(&pool).await;
+    let (user_id, _) = seed_user_with_role(&pool, "normal").await;
+    let (_, section_id) = seed_single_section_document(&pool, user_id).await;
+    sqlx::query(
+        "insert into submissions (id, section_id, user_id, markdown_content, status) values ($1, $2, $3, 'text', 'published')",
+    )
+    .bind(uuid::Uuid::new_v4())
+    .bind(section_id)
+    .bind(user_id)
+    .execute(&pool)
+    .await
+    .expect("insert submission");
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind stalled embedding server");
+    let address = listener.local_addr().expect("embedding server address");
+    let (accepted_tx, accepted_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (_stream, _) = listener.accept().await.expect("accept embedding request");
+        let _ = accepted_tx.send(());
+        std::future::pending::<()>().await;
+    });
+    let client = EmbeddingClient::with_timeout(
+        format!("http://{address}"),
+        std::time::Duration::from_millis(300),
+    );
+    let rebuild_pool = pool.clone();
+    let rebuild = tokio::spawn(async move {
+        projections::rebuild_trivial_for_section(&rebuild_pool, &client, section_id).await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(1), accepted_rx)
+        .await
+        .expect("embedding request should arrive")
+        .expect("embedding server notification");
+
+    let mut writer = pool.begin().await.expect("begin competing writer");
+    tokio::time::timeout(
+        std::time::Duration::from_millis(150),
+        sections::lock_for_update(&mut writer, section_id),
+    )
+    .await
+    .expect("stalled embedding must not hold section lock")
+    .expect("acquire section lock");
+    writer.rollback().await.expect("release writer lock");
+
+    tokio::time::timeout(std::time::Duration::from_secs(2), rebuild)
+        .await
+        .expect("rebuild must have a bounded duration")
+        .expect("rebuild task")
+        .expect("lexical fallback should complete rebuild");
+    server.abort();
+}
+
+#[tokio::test]
+async fn delete_revalidates_subtree_after_waiting_for_a_move() {
+    let Some(pool) = test_pool().await else {
+        eprintln!("Skipping integration test: TEST_DATABASE_URL not set or unreachable");
+        return;
+    };
+    reset_schema(&pool).await;
+    let (user_id, _) = seed_user_with_role(&pool, "normal").await;
+    let (_document_id, parent_a, parent_b, child) = seed_document_tree(&pool, user_id).await;
+    let submission_id = uuid::Uuid::new_v4();
+    sqlx::query(
+        "insert into submissions (id, section_id, user_id, markdown_content, status) values ($1, $2, $3, 'child text', 'published')",
+    )
+    .bind(submission_id)
+    .bind(child)
+    .bind(user_id)
+    .execute(&pool)
+    .await
+    .expect("insert child submission");
+    sqlx::query(
+        "insert into drafts (id, section_id, user_id, base_submission_id, markdown_content) values ($1, $2, $3, $4, 'external draft')",
+    )
+    .bind(uuid::Uuid::new_v4())
+    .bind(parent_a)
+    .bind(user_id)
+    .bind(submission_id)
+    .execute(&pool)
+    .await
+    .expect("insert external draft reference");
+
+    let mut move_tx = pool.begin().await.expect("begin concurrent move");
+    sqlx::query("update sections set parent_id = $2, path = $3 where id = $1")
+        .bind(child)
+        .bind(parent_b)
+        .bind(format!("{parent_b}/{child}"))
+        .execute(&mut *move_tx)
+        .await
+        .expect("move section while holding its row lock");
+
+    let delete_pool = pool.clone();
+    let deletion = tokio::spawn(async move { sections::delete_subtree(&delete_pool, child).await });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert!(
+        !deletion.is_finished(),
+        "deletion should be waiting for move"
+    );
+    move_tx.commit().await.expect("commit concurrent move");
+
+    tokio::time::timeout(std::time::Duration::from_secs(2), deletion)
+        .await
+        .expect("deletion should resume")
+        .expect("deletion task")
+        .expect("deletion succeeds after revalidation");
+    let base_submission_id = sqlx::query_scalar::<_, Option<uuid::Uuid>>(
+        "select base_submission_id from drafts where section_id = $1 and user_id = $2",
+    )
+    .bind(parent_a)
+    .bind(user_id)
+    .fetch_one(&pool)
+    .await
+    .expect("load external draft");
+    assert_eq!(base_submission_id, None);
 }

@@ -244,6 +244,13 @@ pub async fn list_active_clusterable_visible_by_section_in_tx(
     list_active_clusterable_visible_with_executor(&mut **tx, section_id).await
 }
 
+pub async fn list_active_clusterable_visible_by_section(
+    pool: &PgPool,
+    section_id: uuid::Uuid,
+) -> anyhow::Result<Vec<SubmissionRecord>> {
+    list_active_clusterable_visible_with_executor(pool, section_id).await
+}
+
 async fn list_active_clusterable_visible_with_executor<'e, E>(
     executor: E,
     section_id: uuid::Uuid,

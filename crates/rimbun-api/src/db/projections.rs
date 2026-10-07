@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Duration};
 
 use popsam_core::{
     CandidateBestResult, ElectionConfig, ElectionResult, EmbeddedTextInput, run_election,
@@ -11,6 +11,8 @@ use crate::db::{embeddings, submissions::SubmissionRecord};
 
 const PROJECTION_REPRESENTATIVE_COUNT: usize = 5;
 const LEXICAL_EMBEDDING_DIMENSIONS: usize = 128;
+const REBUILD_ATTEMPTS: usize = 3;
+const REBUILD_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, FromRow, Serialize)]
 pub struct ProjectionItemRecord {
@@ -102,18 +104,55 @@ pub async fn rebuild_trivial_for_section(
     embedding_client: &EmbeddingClient,
     section_id: uuid::Uuid,
 ) -> anyhow::Result<Vec<ProjectionItemRecord>> {
-    let mut tx = pool.begin().await?;
-    crate::db::sections::lock_for_update(&mut tx, section_id).await?;
-    let active_submissions =
-        crate::db::submissions::list_active_clusterable_visible_by_section_in_tx(
-            &mut tx, section_id,
-        )
-        .await?;
-    let ranked_items =
-        rank_submissions_with_popsam(pool, embedding_client, &active_submissions).await?;
-    let records = replace_for_section(&mut tx, section_id, &ranked_items).await?;
-    tx.commit().await?;
-    Ok(records)
+    tokio::time::timeout(
+        REBUILD_TIMEOUT,
+        rebuild_with_revalidation(pool, embedding_client, section_id),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("projection rebuild timed out after {REBUILD_TIMEOUT:?}"))?
+}
+
+async fn rebuild_with_revalidation(
+    pool: &PgPool,
+    embedding_client: &EmbeddingClient,
+    section_id: uuid::Uuid,
+) -> anyhow::Result<Vec<ProjectionItemRecord>> {
+    for _ in 0..REBUILD_ATTEMPTS {
+        // Expensive database and HTTP work happens before taking the section lock.
+        let active_submissions =
+            crate::db::submissions::list_active_clusterable_visible_by_section(pool, section_id)
+                .await?;
+        let ranked_items =
+            rank_submissions_with_popsam(pool, embedding_client, &active_submissions).await?;
+
+        let mut tx = pool.begin().await?;
+        crate::db::sections::lock_for_update(&mut tx, section_id).await?;
+        let locked_submissions =
+            crate::db::submissions::list_active_clusterable_visible_by_section_in_tx(
+                &mut tx, section_id,
+            )
+            .await?;
+
+        if submission_ids(&active_submissions) != submission_ids(&locked_submissions) {
+            tx.rollback().await?;
+            continue;
+        }
+
+        let records = replace_for_section(&mut tx, section_id, &ranked_items).await?;
+        tx.commit().await?;
+        return Ok(records);
+    }
+
+    anyhow::bail!("section changed repeatedly while rebuilding its projection")
+}
+
+fn submission_ids(submissions: &[SubmissionRecord]) -> Vec<uuid::Uuid> {
+    let mut ids = submissions
+        .iter()
+        .map(|submission| submission.id)
+        .collect::<Vec<_>>();
+    ids.sort_unstable();
+    ids
 }
 
 async fn rank_submissions_with_popsam(
