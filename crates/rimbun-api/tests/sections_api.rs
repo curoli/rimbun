@@ -2231,3 +2231,95 @@ async fn delete_revalidates_subtree_after_waiting_for_a_move() {
     .expect("load external draft");
     assert_eq!(base_submission_id, None);
 }
+
+#[tokio::test]
+async fn sibling_move_and_multi_section_import_use_the_same_lock_order() {
+    let Some(pool) = test_pool().await else {
+        eprintln!("Skipping integration test: TEST_DATABASE_URL not set or unreachable");
+        return;
+    };
+    reset_schema(&pool).await;
+    let (user_id, _) = seed_user_with_role(&pool, "normal").await;
+    let (_, parent_a, parent_b, _) = seed_document_tree(&pool, user_id).await;
+    let (lower_id, higher_id) = if parent_a < parent_b {
+        (parent_a, parent_b)
+    } else {
+        (parent_b, parent_a)
+    };
+
+    let mut import_tx = pool.begin().await.expect("begin simulated import");
+    sections::lock_for_update(&mut import_tx, lower_id)
+        .await
+        .expect("import locks lower section first");
+
+    let move_pool = pool.clone();
+    let section_move = tokio::spawn(async move {
+        sections::move_section(&move_pool, higher_id, "Moved", true, true, None, 0).await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert!(
+        !section_move.is_finished(),
+        "move should wait for the import's lower lock"
+    );
+
+    tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        sections::lock_for_update(&mut import_tx, higher_id),
+    )
+    .await
+    .expect("import must acquire the higher lock without a deadlock")
+    .expect("lock higher section");
+    import_tx.commit().await.expect("commit simulated import");
+
+    tokio::time::timeout(std::time::Duration::from_secs(2), section_move)
+        .await
+        .expect("move should resume")
+        .expect("move task")
+        .expect("move succeeds");
+}
+
+#[tokio::test]
+async fn sibling_delete_and_multi_section_import_use_the_same_lock_order() {
+    let Some(pool) = test_pool().await else {
+        eprintln!("Skipping integration test: TEST_DATABASE_URL not set or unreachable");
+        return;
+    };
+    reset_schema(&pool).await;
+    let (user_id, _) = seed_user_with_role(&pool, "normal").await;
+    let (_, parent_a, parent_b, _) = seed_document_tree(&pool, user_id).await;
+    let (lower_id, higher_id) = if parent_a < parent_b {
+        (parent_a, parent_b)
+    } else {
+        (parent_b, parent_a)
+    };
+
+    let mut import_tx = pool.begin().await.expect("begin simulated import");
+    sections::lock_for_update(&mut import_tx, lower_id)
+        .await
+        .expect("import locks lower section first");
+
+    let delete_pool = pool.clone();
+    let deletion =
+        tokio::spawn(async move { sections::delete_subtree(&delete_pool, higher_id).await });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert!(
+        !deletion.is_finished(),
+        "deletion should wait for the import's lower lock"
+    );
+
+    tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        sections::lock_for_update(&mut import_tx, higher_id),
+    )
+    .await
+    .expect("import must acquire the higher lock without a deadlock")
+    .expect("lock higher section");
+    import_tx.commit().await.expect("commit simulated import");
+
+    let deleted = tokio::time::timeout(std::time::Duration::from_secs(2), deletion)
+        .await
+        .expect("deletion should resume")
+        .expect("deletion task")
+        .expect("deletion succeeds");
+    assert!(deleted);
+}
