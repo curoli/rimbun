@@ -86,6 +86,7 @@ pub async fn create(
     tx: &mut Transaction<'_, Postgres>,
     submission: &NewSubmission,
 ) -> anyhow::Result<SubmissionRecord> {
+    crate::db::sections::lock_for_update(tx, submission.section_id).await?;
     let record = sqlx::query_as::<_, SubmissionRecord>(
         r#"
         insert into submissions (id, section_id, user_id, base_submission_id, markdown_content, status)
@@ -236,10 +237,20 @@ pub async fn list_active_visible_by_section(
     Ok(records)
 }
 
-pub async fn list_active_clusterable_visible_by_section(
-    pool: &PgPool,
+pub async fn list_active_clusterable_visible_by_section_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
     section_id: uuid::Uuid,
 ) -> anyhow::Result<Vec<SubmissionRecord>> {
+    list_active_clusterable_visible_with_executor(&mut **tx, section_id).await
+}
+
+async fn list_active_clusterable_visible_with_executor<'e, E>(
+    executor: E,
+    section_id: uuid::Uuid,
+) -> anyhow::Result<Vec<SubmissionRecord>>
+where
+    E: sqlx::Executor<'e, Database = Postgres>,
+{
     let records = sqlx::query_as::<_, SubmissionRecord>(
         r#"
         select
@@ -265,7 +276,7 @@ pub async fn list_active_clusterable_visible_by_section(
         "#,
     )
     .bind(section_id)
-    .fetch_all(pool)
+    .fetch_all(executor)
     .await?;
 
     Ok(records)

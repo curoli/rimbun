@@ -83,6 +83,29 @@ fn validate_references(
     Ok(())
 }
 
+fn validate_base_submissions(
+    entries: &[ImportEntry],
+    base_sections: &HashMap<Uuid, Uuid>,
+) -> Result<()> {
+    for entry in entries {
+        let Some(base_submission_id) = entry.base_submission_id else {
+            continue;
+        };
+        let base_section_id = base_sections.get(&base_submission_id).with_context(|| {
+            format!(
+                "section '{}' references nonexistent base submission {base_submission_id}",
+                entry_label(entry)
+            )
+        })?;
+        ensure!(
+            *base_section_id == entry.section_id,
+            "section '{}' references base submission {base_submission_id} from another section",
+            entry_label(entry)
+        );
+    }
+    Ok(())
+}
+
 async fn run(args: Args) -> Result<()> {
     let raw = fs::read_to_string(&args.input_file)
         .with_context(|| format!("failed to read input file '{}'", args.input_file))?;
@@ -113,7 +136,7 @@ async fn run(args: Args) -> Result<()> {
 
     let config = Config::from_env().context("failed to load configuration")?;
     let pool = PgPoolOptions::new()
-        .max_connections(1)
+        .max_connections(2)
         .connect(&config.database_url)
         .await
         .context("failed to connect to database")?;
@@ -141,6 +164,22 @@ async fn run(args: Args) -> Result<()> {
         .iter()
         .map(|entry| entry.section_id)
         .collect::<Vec<_>>();
+    let base_submission_ids = import
+        .entries
+        .iter()
+        .filter_map(|entry| entry.base_submission_id)
+        .collect::<Vec<_>>();
+    let base_sections = sqlx::query_as::<_, (Uuid, Uuid)>(
+        "select id, section_id from submissions where id = any($1)",
+    )
+    .bind(&base_submission_ids)
+    .fetch_all(&pool)
+    .await
+    .context("failed to validate base submissions")?
+    .into_iter()
+    .collect::<HashMap<_, _>>();
+    validate_base_submissions(&import.entries, &base_sections)?;
+
     let references = submissions::current_references(&pool, &section_ids)
         .await
         .context("failed to load current main submissions")?
@@ -170,6 +209,20 @@ async fn run(args: Args) -> Result<()> {
         .begin()
         .await
         .context("failed to open import transaction")?;
+    sections::lock_many_for_update(&mut tx, &section_ids)
+        .await
+        .context("failed to lock sections for import")?;
+    let locked_base_sections = sqlx::query_as::<_, (Uuid, Uuid)>(
+        "select id, section_id from submissions where id = any($1)",
+    )
+    .bind(&base_submission_ids)
+    .fetch_all(&mut *tx)
+    .await
+    .context("failed to recheck base submissions")?
+    .into_iter()
+    .collect::<HashMap<_, _>>();
+    validate_base_submissions(&import.entries, &locked_base_sections)?;
+
     let locked_references = submissions::current_references_in_tx(&mut tx, &section_ids)
         .await
         .context("failed to recheck current main submissions")?
@@ -297,6 +350,46 @@ async fn main() -> ExitCode {
             eprintln!("Error: {error:#}");
             ExitCode::from(1)
         }
+    }
+}
+
+#[cfg(test)]
+mod base_tests {
+    use super::{ImportEntry, validate_base_submissions};
+    use std::collections::HashMap;
+    use uuid::Uuid;
+
+    fn entry(section_id: Uuid, base_submission_id: Option<Uuid>) -> ImportEntry {
+        ImportEntry {
+            section_id,
+            section_number: Some("1.2".to_owned()),
+            section_title: Some("Example".to_owned()),
+            reference_submission_id: None,
+            base_submission_id,
+            draft_markdown: "Draft".to_owned(),
+            draft_main_comment_markdown: None,
+        }
+    }
+
+    #[test]
+    fn base_validation_rejects_missing_submission() {
+        let section_id = Uuid::new_v4();
+        let base_id = Uuid::new_v4();
+        let error = validate_base_submissions(&[entry(section_id, Some(base_id))], &HashMap::new())
+            .expect_err("missing base must be rejected");
+
+        assert!(error.to_string().contains("nonexistent base submission"));
+    }
+
+    #[test]
+    fn base_validation_rejects_submission_from_another_section() {
+        let section_id = Uuid::new_v4();
+        let base_id = Uuid::new_v4();
+        let base_sections = HashMap::from([(base_id, Uuid::new_v4())]);
+        let error = validate_base_submissions(&[entry(section_id, Some(base_id))], &base_sections)
+            .expect_err("cross-section base must be rejected");
+
+        assert!(error.to_string().contains("from another section"));
     }
 }
 

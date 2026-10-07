@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use sqlx::{FromRow, PgPool};
+use sqlx::{FromRow, PgPool, Postgres, Transaction};
 
 #[derive(Debug, Clone, FromRow, Serialize)]
 pub struct ModerationRecord {
@@ -23,10 +23,26 @@ pub struct UpsertModeration {
     pub moderated_by: uuid::Uuid,
 }
 
-pub async fn upsert(
-    pool: &PgPool,
+pub async fn upsert_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
     moderation: &UpsertModeration,
 ) -> anyhow::Result<ModerationRecord> {
+    let section_id =
+        sqlx::query_scalar::<_, uuid::Uuid>("select section_id from submissions where id = $1")
+            .bind(moderation.submission_id)
+            .fetch_one(&mut **tx)
+            .await?;
+    crate::db::sections::lock_for_update(tx, section_id).await?;
+    upsert_with_executor(&mut **tx, moderation).await
+}
+
+async fn upsert_with_executor<'e, E>(
+    executor: E,
+    moderation: &UpsertModeration,
+) -> anyhow::Result<ModerationRecord>
+where
+    E: sqlx::Executor<'e, Database = Postgres>,
+{
     let record = sqlx::query_as::<_, ModerationRecord>(
         r#"
         insert into submission_moderation (
@@ -56,7 +72,7 @@ pub async fn upsert(
     .bind(moderation.excluded_from_clustering)
     .bind(&moderation.reason)
     .bind(moderation.moderated_by)
-    .fetch_one(pool)
+    .fetch_one(executor)
     .await?;
 
     Ok(record)

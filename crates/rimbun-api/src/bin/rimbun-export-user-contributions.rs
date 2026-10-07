@@ -399,6 +399,21 @@ async fn main() -> ExitCode {
         }
     };
 
+    let mut tx = match pool.begin().await {
+        Ok(tx) => tx,
+        Err(error) => {
+            eprintln!("Error: failed to start export snapshot: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    if let Err(error) = sqlx::query("set transaction isolation level repeatable read read only")
+        .execute(&mut *tx)
+        .await
+    {
+        eprintln!("Error: failed to configure export snapshot: {error}");
+        return ExitCode::from(1);
+    }
+
     let drafts = match sqlx::query_as::<_, DraftRow>(
         r#"
         select
@@ -413,7 +428,7 @@ async fn main() -> ExitCode {
         "#,
     )
     .bind(user.id)
-    .fetch_all(&pool)
+    .fetch_all(&mut *tx)
     .await
     {
         Ok(rows) => rows,
@@ -449,7 +464,7 @@ async fn main() -> ExitCode {
         "#,
     )
     .bind(user.id)
-    .fetch_all(&pool)
+    .fetch_all(&mut *tx)
     .await
     {
         Ok(rows) => rows,
@@ -467,7 +482,7 @@ async fn main() -> ExitCode {
         "#,
     )
     .bind(user.id)
-    .fetch_all(&pool)
+    .fetch_all(&mut *tx)
     .await
     {
         Ok(rows) => rows,
@@ -494,7 +509,7 @@ async fn main() -> ExitCode {
         join documents d on d.id = s.document_id
         "#,
     )
-    .fetch_all(&pool)
+    .fetch_all(&mut *tx)
     .await
     {
         Ok(rows) => rows,
@@ -525,16 +540,21 @@ async fn main() -> ExitCode {
         }
     };
     let selected_section_ids = selected_sections.iter().copied().collect::<Vec<_>>();
-    let references = match submissions::current_references(&pool, &selected_section_ids).await {
-        Ok(rows) => rows
-            .into_iter()
-            .map(|reference| (reference.section_id, reference))
-            .collect::<HashMap<_, _>>(),
-        Err(error) => {
-            eprintln!("Error: failed to load current main submissions: {error}");
-            return ExitCode::from(1);
-        }
-    };
+    let references =
+        match submissions::current_references_in_tx(&mut tx, &selected_section_ids).await {
+            Ok(rows) => rows
+                .into_iter()
+                .map(|reference| (reference.section_id, reference))
+                .collect::<HashMap<_, _>>(),
+            Err(error) => {
+                eprintln!("Error: failed to load current main submissions: {error}");
+                return ExitCode::from(1);
+            }
+        };
+    if let Err(error) = tx.commit().await {
+        eprintln!("Error: failed to complete export snapshot: {error}");
+        return ExitCode::from(1);
+    }
     let sections_by_id = section_meta_rows
         .iter()
         .map(|section| (section.id, section))

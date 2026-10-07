@@ -153,6 +153,15 @@ pub async fn list_all(pool: &PgPool) -> anyhow::Result<Vec<UserRecord>> {
 }
 
 pub async fn delete_by_id(pool: &PgPool, user_id: uuid::Uuid) -> anyhow::Result<bool> {
+    let mut tx = pool.begin().await?;
+    let section_ids = sqlx::query_scalar::<_, uuid::Uuid>(
+        "select distinct section_id from submissions where user_id = $1",
+    )
+    .bind(user_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    crate::db::sections::lock_many_for_update(&mut tx, &section_ids).await?;
+
     let result = sqlx::query(
         r#"
         delete from users
@@ -160,8 +169,10 @@ pub async fn delete_by_id(pool: &PgPool, user_id: uuid::Uuid) -> anyhow::Result<
         "#,
     )
     .bind(user_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+
+    tx.commit().await?;
 
     Ok(result.rows_affected() > 0)
 }

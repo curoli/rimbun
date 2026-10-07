@@ -5,7 +5,7 @@ use popsam_core::{
 };
 use rimbun_embedding_client::{EmbeddingClient, types::EmbeddingRequest};
 use serde::Serialize;
-use sqlx::{FromRow, PgPool};
+use sqlx::{FromRow, PgPool, Postgres, Transaction};
 
 use crate::db::{embeddings, submissions::SubmissionRecord};
 
@@ -51,7 +51,7 @@ pub async fn list_by_section(
 }
 
 async fn replace_for_section(
-    pool: &PgPool,
+    tx: &mut Transaction<'_, Postgres>,
     section_id: uuid::Uuid,
     items: &[RankedProjectionItem],
 ) -> anyhow::Result<Vec<ProjectionItemRecord>> {
@@ -62,7 +62,7 @@ async fn replace_for_section(
         "#,
     )
     .bind(section_id)
-    .execute(pool)
+    .execute(&mut **tx)
     .await?;
 
     let mut records = Vec::with_capacity(items.len());
@@ -88,7 +88,7 @@ async fn replace_for_section(
         .bind(item.rank)
         .bind(&item.cluster_id)
         .bind(item.score)
-        .fetch_one(pool)
+        .fetch_one(&mut **tx)
         .await?;
 
         records.push(record);
@@ -102,12 +102,18 @@ pub async fn rebuild_trivial_for_section(
     embedding_client: &EmbeddingClient,
     section_id: uuid::Uuid,
 ) -> anyhow::Result<Vec<ProjectionItemRecord>> {
+    let mut tx = pool.begin().await?;
+    crate::db::sections::lock_for_update(&mut tx, section_id).await?;
     let active_submissions =
-        crate::db::submissions::list_active_clusterable_visible_by_section(pool, section_id)
-            .await?;
+        crate::db::submissions::list_active_clusterable_visible_by_section_in_tx(
+            &mut tx, section_id,
+        )
+        .await?;
     let ranked_items =
         rank_submissions_with_popsam(pool, embedding_client, &active_submissions).await?;
-    replace_for_section(pool, section_id, &ranked_items).await
+    let records = replace_for_section(&mut tx, section_id, &ranked_items).await?;
+    tx.commit().await?;
+    Ok(records)
 }
 
 async fn rank_submissions_with_popsam(

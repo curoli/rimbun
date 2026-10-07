@@ -36,8 +36,13 @@ pub async fn update(
         .map_err(|err| ApiError::internal(err.to_string()))?
         .ok_or_else(|| ApiError::not_found("submission not found"))?;
 
-    let moderation = moderation::upsert(
-        &state.pool,
+    let mut tx = state
+        .pool
+        .begin()
+        .await
+        .map_err(|err| ApiError::internal(err.to_string()))?;
+    let moderation = moderation::upsert_in_tx(
+        &mut tx,
         &moderation::UpsertModeration {
             submission_id,
             hidden: payload.hidden,
@@ -49,6 +54,10 @@ pub async fn update(
     )
     .await
     .map_err(|err| ApiError::internal(err.to_string()))?;
+
+    tx.commit()
+        .await
+        .map_err(|err| ApiError::internal(err.to_string()))?;
 
     projections::rebuild_trivial_for_section(
         &state.pool,

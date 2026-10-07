@@ -2,6 +2,42 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::{FromRow, PgPool, Postgres, Transaction};
 
+pub async fn lock_for_update(
+    tx: &mut Transaction<'_, Postgres>,
+    section_id: uuid::Uuid,
+) -> anyhow::Result<()> {
+    let locked =
+        sqlx::query_scalar::<_, uuid::Uuid>("select id from sections where id = $1 for update")
+            .bind(section_id)
+            .fetch_optional(&mut **tx)
+            .await?;
+
+    anyhow::ensure!(locked.is_some(), "section {section_id} not found");
+    Ok(())
+}
+
+pub async fn lock_many_for_update(
+    tx: &mut Transaction<'_, Postgres>,
+    section_ids: &[uuid::Uuid],
+) -> anyhow::Result<()> {
+    let mut expected = section_ids.to_vec();
+    expected.sort_unstable();
+    expected.dedup();
+
+    let locked = sqlx::query_scalar::<_, uuid::Uuid>(
+        "select id from sections where id = any($1) order by id for update",
+    )
+    .bind(&expected)
+    .fetch_all(&mut **tx)
+    .await?;
+
+    anyhow::ensure!(
+        locked == expected,
+        "one or more sections disappeared while acquiring import locks"
+    );
+    Ok(())
+}
+
 fn normalized_order<T: Copy + PartialEq>(
     items: Vec<T>,
     moved_item: Option<T>,
@@ -334,7 +370,6 @@ pub async fn delete_subtree(pool: &PgPool, section_id: uuid::Uuid) -> anyhow::Re
         select id, document_id, parent_id, title, has_heading, has_own_text, position, path, created_at
         from sections
         where id = $1
-        for update
         "#,
     )
     .bind(section_id)
@@ -345,6 +380,14 @@ pub async fn delete_subtree(pool: &PgPool, section_id: uuid::Uuid) -> anyhow::Re
         tx.rollback().await?;
         return Ok(false);
     };
+
+    let subtree_section_ids = sqlx::query_scalar::<_, uuid::Uuid>(
+        "select id from sections where path = $1 or path like $1 || '/%'",
+    )
+    .bind(&current.path)
+    .fetch_all(&mut *tx)
+    .await?;
+    lock_many_for_update(&mut tx, &subtree_section_ids).await?;
 
     let subtree_submission_ids = r#"
         select submission.id

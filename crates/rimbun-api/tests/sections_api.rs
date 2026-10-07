@@ -2,18 +2,34 @@ use axum::{
     body::{Body, to_bytes},
     http::{HeaderMap, Method, Request, StatusCode, header},
 };
-use rimbun_api::{app, config::Config};
+use rimbun_api::{
+    app,
+    config::Config,
+    db::{sections, submissions},
+};
 use serde_json::json;
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use tower::util::ServiceExt;
 
 async fn test_pool() -> Option<PgPool> {
-    let database_url = std::env::var("TEST_DATABASE_URL").ok()?;
-    PgPoolOptions::new()
+    let database_url = match std::env::var("TEST_DATABASE_URL") {
+        Ok(database_url) => database_url,
+        Err(error) if std::env::var_os("RIMBUN_REQUIRE_TEST_DATABASE").is_some() => {
+            panic!("TEST_DATABASE_URL is required: {error}")
+        }
+        Err(_) => return None,
+    };
+    match PgPoolOptions::new()
         .max_connections(5)
         .connect(&database_url)
         .await
-        .ok()
+    {
+        Ok(pool) => Some(pool),
+        Err(error) if std::env::var_os("RIMBUN_REQUIRE_TEST_DATABASE").is_some() => {
+            panic!("required test database is unavailable: {error}")
+        }
+        Err(_) => None,
+    }
 }
 
 async fn reset_schema(pool: &PgPool) {
@@ -131,6 +147,11 @@ async fn seed_nested_descendant(
     child: uuid::Uuid,
 ) -> uuid::Uuid {
     let grandchild = uuid::Uuid::new_v4();
+    let child_path = sqlx::query_scalar::<_, String>("select path from sections where id = $1")
+        .bind(child)
+        .fetch_one(pool)
+        .await
+        .expect("load child path");
     sqlx::query(
         r#"
         insert into sections (id, document_id, parent_id, title, position, path)
@@ -142,7 +163,7 @@ async fn seed_nested_descendant(
     .bind(child)
     .bind("Grandchild")
     .bind(0)
-    .bind(format!("{child}/{grandchild}"))
+    .bind(format!("{child_path}/{grandchild}"))
     .execute(pool)
     .await
     .expect("insert grandchild");
@@ -281,6 +302,8 @@ async fn patch_section_moves_section_and_rewrites_descendants() {
         .body(Body::from(
             json!({
                 "title": "Child moved",
+                "has_heading": true,
+                "has_own_text": true,
                 "parent_id": parent_b,
                 "position": 0
             })
@@ -508,6 +531,8 @@ async fn patch_section_rejects_move_into_own_subtree() {
         .body(Body::from(
             json!({
                 "title": "Child",
+                "has_heading": true,
+                "has_own_text": true,
                 "parent_id": grandchild,
                 "position": 0
             })
@@ -566,6 +591,8 @@ async fn patch_section_reorders_within_same_parent() {
         .body(Body::from(
             json!({
                 "title": "Parent A",
+                "has_heading": true,
+                "has_own_text": true,
                 "parent_id": null,
                 "position": 1
             })
@@ -844,7 +871,7 @@ async fn admin_can_reset_user_password_and_user_can_login_with_it() {
     reset_schema(&pool).await;
 
     let (_admin_id, admin_session) = seed_admin_user(&pool).await;
-    let (_normal_id, _normal_session) = seed_user_with_role(&pool, "normal").await;
+    let (normal_id, _normal_session) = seed_user_with_role(&pool, "normal").await;
 
     let app = app::build(test_config(
         std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL"),
@@ -872,9 +899,10 @@ async fn admin_can_reset_user_password_and_user_can_login_with_it() {
     let users: Vec<serde_json::Value> = serde_json::from_slice(&list_body).expect("users json");
     let normal_user = users
         .iter()
-        .find(|user| user["username"] == "bob")
+        .find(|user| user["id"] == normal_id.to_string())
         .expect("normal user");
     let normal_user_id = normal_user["id"].as_str().expect("user id");
+    let normal_username = normal_user["username"].as_str().expect("username");
 
     let reset_request = Request::builder()
         .method(Method::POST)
@@ -902,7 +930,7 @@ async fn admin_can_reset_user_password_and_user_can_login_with_it() {
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(
             json!({
-                "identifier": "bob",
+                "identifier": normal_username,
                 "password": "admin reset correct horse"
             })
             .to_string(),
@@ -1874,4 +1902,149 @@ async fn authors_and_admins_can_delete_submissions_and_comments() {
         admin_delete_submission_response.status(),
         StatusCode::NO_CONTENT
     );
+}
+
+#[tokio::test]
+async fn section_lock_serializes_reference_changing_transactions() {
+    let Some(pool) = test_pool().await else {
+        eprintln!("Skipping integration test: TEST_DATABASE_URL not set or unreachable");
+        return;
+    };
+    reset_schema(&pool).await;
+    let (admin_id, _) = seed_admin_user(&pool).await;
+    let (_, section_id) = seed_single_section_document(&pool, admin_id).await;
+
+    let mut import_tx = pool.begin().await.expect("begin import transaction");
+    sections::lock_for_update(&mut import_tx, section_id)
+        .await
+        .expect("lock section for import");
+
+    let competing_pool = pool.clone();
+    let mut competing = tokio::spawn(async move {
+        let mut tx = competing_pool
+            .begin()
+            .await
+            .expect("begin competing transaction");
+        sections::lock_for_update(&mut tx, section_id)
+            .await
+            .expect("acquire competing section lock");
+        tx.rollback()
+            .await
+            .expect("roll back competing transaction");
+    });
+
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(100), &mut competing)
+            .await
+            .is_err(),
+        "reference-changing transaction must wait for the import lock"
+    );
+
+    import_tx.commit().await.expect("release import lock");
+    tokio::time::timeout(std::time::Duration::from_secs(2), competing)
+        .await
+        .expect("competing transaction should resume")
+        .expect("competing task should finish");
+}
+
+#[tokio::test]
+async fn repeatable_read_export_keeps_draft_and_reference_in_one_snapshot() {
+    let Some(pool) = test_pool().await else {
+        eprintln!("Skipping integration test: TEST_DATABASE_URL not set or unreachable");
+        return;
+    };
+    reset_schema(&pool).await;
+    let (user_id, _) = seed_user_with_role(&pool, "normal").await;
+    let (_, section_id) = seed_single_section_document(&pool, user_id).await;
+    let old_reference = uuid::Uuid::new_v4();
+    let new_reference = uuid::Uuid::new_v4();
+
+    sqlx::query(
+        "insert into submissions (id, section_id, user_id, markdown_content, status) values ($1, $2, $3, 'old main', 'published')",
+    )
+    .bind(old_reference)
+    .bind(section_id)
+    .bind(user_id)
+    .execute(&pool)
+    .await
+    .expect("insert old reference");
+    sqlx::query(
+        "insert into section_projection_items (section_id, submission_id, role, rank) values ($1, $2, 'main', 0)",
+    )
+    .bind(section_id)
+    .bind(old_reference)
+    .execute(&pool)
+    .await
+    .expect("project old reference");
+    sqlx::query(
+        "insert into drafts (id, section_id, user_id, base_submission_id, markdown_content) values ($1, $2, $3, $4, 'old draft')",
+    )
+    .bind(uuid::Uuid::new_v4())
+    .bind(section_id)
+    .bind(user_id)
+    .bind(old_reference)
+    .execute(&pool)
+    .await
+    .expect("insert old draft");
+
+    let mut export_tx = pool.begin().await.expect("begin export snapshot");
+    sqlx::query("set transaction isolation level repeatable read read only")
+        .execute(&mut *export_tx)
+        .await
+        .expect("configure export snapshot");
+    let exported_draft = sqlx::query_as::<_, (String, Option<uuid::Uuid>)>(
+        "select markdown_content, base_submission_id from drafts where section_id = $1 and user_id = $2",
+    )
+    .bind(section_id)
+    .bind(user_id)
+    .fetch_one(&mut *export_tx)
+    .await
+    .expect("read draft from snapshot");
+
+    let mut update_tx = pool.begin().await.expect("begin concurrent update");
+    sections::lock_for_update(&mut update_tx, section_id)
+        .await
+        .expect("lock section for concurrent update");
+    sqlx::query(
+        "insert into submissions (id, section_id, user_id, markdown_content, status) values ($1, $2, $3, 'new main', 'published')",
+    )
+    .bind(new_reference)
+    .bind(section_id)
+    .bind(user_id)
+    .execute(&mut *update_tx)
+    .await
+    .expect("insert new reference");
+    sqlx::query("delete from section_projection_items where section_id = $1")
+        .bind(section_id)
+        .execute(&mut *update_tx)
+        .await
+        .expect("remove old projection");
+    sqlx::query(
+        "insert into section_projection_items (section_id, submission_id, role, rank) values ($1, $2, 'main', 0)",
+    )
+    .bind(section_id)
+    .bind(new_reference)
+    .execute(&mut *update_tx)
+    .await
+    .expect("project new reference");
+    sqlx::query(
+        "update drafts set base_submission_id = $3, markdown_content = 'new draft' where section_id = $1 and user_id = $2",
+    )
+    .bind(section_id)
+    .bind(user_id)
+    .bind(new_reference)
+    .execute(&mut *update_tx)
+    .await
+    .expect("update draft");
+    update_tx.commit().await.expect("commit concurrent update");
+
+    let references = submissions::current_references_in_tx(&mut export_tx, &[section_id])
+        .await
+        .expect("read reference from snapshot");
+    assert_eq!(
+        exported_draft,
+        ("old draft".to_owned(), Some(old_reference))
+    );
+    assert_eq!(references[0].submission_id, old_reference);
+    export_tx.commit().await.expect("complete export snapshot");
 }
