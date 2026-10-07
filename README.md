@@ -146,8 +146,8 @@ Available commands:
 ./rimbunctl dev verify-backup <backup-file>
 ./rimbunctl dev restore <backup-file>
 ./rimbunctl dev list-users
-./rimbunctl dev export-contributions <username> [output-file]
-./rimbunctl dev import-contributions <username> <input-file> [--publish]
+./rimbunctl dev export-contributions <username> [output-file] [--document <slug>] [--section <number-or-uuid>] [--recursive] [--include-empty]
+./rimbunctl dev import-contributions <username> <input-file> [--dry-run] [--publish]
 ./rimbunctl dev set-role <username> <role>
 ./rimbunctl dev set-password <username> <new-password>
 ```
@@ -197,15 +197,22 @@ Export a user's current contribution workspace as human-readable TOML, edit sele
 `draft_markdown` and optional `draft_main_comment_markdown` values, and import it again:
 
 ```bash
-./rimbunctl dev export-contributions jati jati.toml
+./rimbunctl dev export-contributions jati jati.toml \
+  --document quran --section 1.2 --recursive --include-empty
+./rimbunctl dev import-contributions jati jati.toml --dry-run
 ./rimbunctl dev import-contributions jati jati.toml
 ./rimbunctl dev import-contributions jati jati.toml --publish
 ```
 
 Each entry includes the stable `section_id`, its reader-style `section_number` such as `1.2.3`,
 the current `section_title`, and a structured `section_breadcrumb` containing all non-empty
-ancestor titles. Imports only change sections whose `[[entries]]` blocks remain in the input
-file. Without `--publish`, imported contributions remain drafts for review.
+ancestor titles. `--include-empty` also exports sections without an existing contribution by this
+user and uses the current main version as the initial draft and conflict-detection reference.
+`--document` limits the export to a document slug; `--section` accepts a section number or UUID,
+and `--recursive` includes its descendants. Imports only change sections whose `[[entries]]`
+blocks remain in the input file. Use `--dry-run` to validate the complete file without writing.
+The real import validates all entries before writing them in one transaction. Without `--publish`,
+imported contributions remain drafts for review.
 
 `rimbunctl` is implemented as a Rust CLI with a thin launcher script at the repository root.
 For `start` and `restart`, it waits until every requested service actually responds before

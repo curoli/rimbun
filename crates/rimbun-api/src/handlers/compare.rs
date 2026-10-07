@@ -660,7 +660,8 @@ mod tests {
         let main = Document::with_id("main", "Der braune Hund jagt die schwarze Katze.");
         let alt = Document::with_id("alt", "Der große braune Hund jagt die schwarze Katze.");
         let normalized_alt = normalize_document(&alt, &options).expect("normalize alt");
-        let comparison_set = compare_many(&main, &[alt.clone()], &options).expect("compare");
+        let comparison_set =
+            compare_many(&main, std::slice::from_ref(&alt), &options).expect("compare");
         let block = comparison_set
             .reference_blocks
             .iter()

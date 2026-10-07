@@ -25,6 +25,63 @@ pub struct NewSubmission {
     pub markdown_content: String,
 }
 
+#[derive(Debug, Clone, FromRow)]
+pub struct ReferenceSubmission {
+    pub section_id: uuid::Uuid,
+    pub submission_id: uuid::Uuid,
+    pub markdown_content: String,
+}
+
+async fn current_references_with_executor<'e, E>(
+    executor: E,
+    section_ids: &[uuid::Uuid],
+) -> anyhow::Result<Vec<ReferenceSubmission>>
+where
+    E: sqlx::Executor<'e, Database = Postgres>,
+{
+    let records = sqlx::query_as::<_, ReferenceSubmission>(
+        r#"
+        select distinct on (s.section_id)
+          s.section_id,
+          s.id as submission_id,
+          s.markdown_content
+        from submissions s
+        left join section_projection_items spi
+          on spi.section_id = s.section_id
+         and spi.submission_id = s.id
+        left join submission_moderation sm on sm.submission_id = s.id
+        where s.section_id = any($1)
+          and s.superseded_by is null
+          and coalesce(sm.soft_deleted, false) = false
+          and coalesce(sm.hidden, false) = false
+        order by
+          s.section_id,
+          case when spi.role = 'main' then 0 when spi.submission_id is not null then 1 else 2 end,
+          spi.rank asc nulls last,
+          s.published_at desc
+        "#,
+    )
+    .bind(section_ids)
+    .fetch_all(executor)
+    .await?;
+
+    Ok(records)
+}
+
+pub async fn current_references(
+    pool: &PgPool,
+    section_ids: &[uuid::Uuid],
+) -> anyhow::Result<Vec<ReferenceSubmission>> {
+    current_references_with_executor(pool, section_ids).await
+}
+
+pub async fn current_references_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    section_ids: &[uuid::Uuid],
+) -> anyhow::Result<Vec<ReferenceSubmission>> {
+    current_references_with_executor(&mut **tx, section_ids).await
+}
+
 pub async fn create(
     tx: &mut Transaction<'_, Postgres>,
     submission: &NewSubmission,

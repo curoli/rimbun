@@ -60,12 +60,22 @@ enum CommandKind {
     ExportContributions {
         username: String,
         file: Option<String>,
+        #[arg(long)]
+        document: Option<String>,
+        #[arg(long, requires = "document")]
+        section: Option<String>,
+        #[arg(long, requires = "section")]
+        recursive: bool,
+        #[arg(long)]
+        include_empty: bool,
     },
     ImportContributions {
         username: String,
         file: String,
         #[arg(long)]
         publish: bool,
+        #[arg(long)]
+        dry_run: bool,
     },
     Start {
         #[arg(default_value = "all")]
@@ -2211,12 +2221,20 @@ fn list_users(paths: &Paths, profile: &ResolvedProfile) -> Result<()> {
     Ok(())
 }
 
+struct ExportContributionOptions<'a> {
+    file: Option<&'a str>,
+    document: Option<&'a str>,
+    section: Option<&'a str>,
+    recursive: bool,
+    include_empty: bool,
+}
+
 fn export_contributions(
     registry: &ConfigRegistry,
     paths: &Paths,
     profile: &ResolvedProfile,
     username: &str,
-    file: Option<&str>,
+    options: ExportContributionOptions<'_>,
 ) -> Result<()> {
     if username.is_empty() {
         bail!("username is required");
@@ -2236,8 +2254,20 @@ fn export_contributions(
         .current_dir(&paths.repo_root)
         .envs(&profile.env);
 
-    if let Some(file) = file {
+    if let Some(file) = options.file {
         command.arg(file);
+    }
+    if let Some(document) = options.document {
+        command.arg("--document").arg(document);
+    }
+    if let Some(section) = options.section {
+        command.arg("--section").arg(section);
+    }
+    if options.recursive {
+        command.arg("--recursive");
+    }
+    if options.include_empty {
+        command.arg("--include-empty");
     }
 
     let status = command.status()?;
@@ -2254,6 +2284,7 @@ fn import_contributions(
     username: &str,
     file: &str,
     publish: bool,
+    dry_run: bool,
 ) -> Result<()> {
     if username.is_empty() {
         bail!("username is required");
@@ -2278,6 +2309,9 @@ fn import_contributions(
         .envs(&profile.env);
     if publish {
         command.arg("--publish");
+    }
+    if dry_run {
+        command.arg("--dry-run");
     }
 
     let status = command.status()?;
@@ -3365,14 +3399,34 @@ fn run() -> Result<ExitCode> {
             }
         }
         CommandKind::ListUsers => list_users(&paths, &profile)?,
-        CommandKind::ExportContributions { username, file } => {
-            export_contributions(&registry, &paths, &profile, &username, file.as_deref())?
-        }
+        CommandKind::ExportContributions {
+            username,
+            file,
+            document,
+            section,
+            recursive,
+            include_empty,
+        } => export_contributions(
+            &registry,
+            &paths,
+            &profile,
+            &username,
+            ExportContributionOptions {
+                file: file.as_deref(),
+                document: document.as_deref(),
+                section: section.as_deref(),
+                recursive,
+                include_empty,
+            },
+        )?,
         CommandKind::ImportContributions {
             username,
             file,
             publish,
-        } => import_contributions(&registry, &paths, &profile, &username, &file, publish)?,
+            dry_run,
+        } => import_contributions(
+            &registry, &paths, &profile, &username, &file, publish, dry_run,
+        )?,
         CommandKind::Start { service, source } => {
             print_profile_endpoints(&profile);
             for service in dependency_order(&profile, &service)? {
@@ -3569,6 +3623,53 @@ mod tests {
             CommandKind::Deploy {
                 dry_run: true,
                 allow_dirty: true
+            }
+        ));
+    }
+
+    #[test]
+    fn contribution_commands_accept_scope_and_safety_flags() {
+        let export = Cli::try_parse_from([
+            "rimbunctl",
+            "dev",
+            "export-contributions",
+            "jati",
+            "jati.toml",
+            "--document",
+            "quran",
+            "--section",
+            "1.2",
+            "--recursive",
+            "--include-empty",
+        ])
+        .expect("parse contribution export");
+        assert!(matches!(
+            export.command,
+            CommandKind::ExportContributions {
+                document: Some(document),
+                section: Some(section),
+                recursive: true,
+                include_empty: true,
+                ..
+            } if document == "quran" && section == "1.2"
+        ));
+
+        let import = Cli::try_parse_from([
+            "rimbunctl",
+            "dev",
+            "import-contributions",
+            "jati",
+            "jati.toml",
+            "--publish",
+            "--dry-run",
+        ])
+        .expect("parse contribution import");
+        assert!(matches!(
+            import.command,
+            CommandKind::ImportContributions {
+                publish: true,
+                dry_run: true,
+                ..
             }
         ));
     }

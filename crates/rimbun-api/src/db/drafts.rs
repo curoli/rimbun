@@ -23,7 +23,13 @@ pub struct UpsertDraft {
     pub main_comment_markdown: Option<String>,
 }
 
-pub async fn upsert(pool: &PgPool, draft: &UpsertDraft) -> anyhow::Result<DraftRecord> {
+async fn upsert_with_executor<'e, E>(
+    executor: E,
+    draft: &UpsertDraft,
+) -> anyhow::Result<DraftRecord>
+where
+    E: sqlx::Executor<'e, Database = Postgres>,
+{
     let record = sqlx::query_as::<_, DraftRecord>(
         r#"
         insert into drafts (
@@ -50,10 +56,21 @@ pub async fn upsert(pool: &PgPool, draft: &UpsertDraft) -> anyhow::Result<DraftR
     .bind(draft.base_submission_id)
     .bind(&draft.markdown_content)
     .bind(&draft.main_comment_markdown)
-    .fetch_one(pool)
+    .fetch_one(executor)
     .await?;
 
     Ok(record)
+}
+
+pub async fn upsert(pool: &PgPool, draft: &UpsertDraft) -> anyhow::Result<DraftRecord> {
+    upsert_with_executor(pool, draft).await
+}
+
+pub async fn upsert_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    draft: &UpsertDraft,
+) -> anyhow::Result<DraftRecord> {
+    upsert_with_executor(&mut **tx, draft).await
 }
 
 pub async fn find_by_section_and_user(
