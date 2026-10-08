@@ -1245,6 +1245,27 @@ fn latest_backup(paths: &Paths) -> (String, bool) {
     )
 }
 
+fn projection_job_status(paths: &Paths, profile: &ResolvedProfile) -> String {
+    let Some(db_name) = profile.vars.get("db_name") else {
+        return "unknown (database name missing)".to_owned();
+    };
+    if !profile.services.contains_key(&ServiceName::Db) {
+        return "not checked (external database)".to_owned();
+    }
+    let query = "SELECT count(*) || ' pending, ' || count(*) FILTER (WHERE lease_until > now()) || ' running, ' || count(*) FILTER (WHERE last_error IS NOT NULL) || ' awaiting retry' FROM projection_jobs";
+    let command = format!(
+        "docker compose exec -T postgres psql -U postgres -d {} -tAc {}",
+        shell_quote(db_name),
+        shell_quote(query)
+    );
+    match shell_command(&command, &paths.repo_root, &profile.env).output() {
+        Ok(output) if output.status.success() => {
+            String::from_utf8_lossy(&output.stdout).trim().to_owned()
+        }
+        _ => "unknown (job query failed)".to_owned(),
+    }
+}
+
 fn show_status(paths: &Paths, profile: &ResolvedProfile) -> OverallStatus {
     let reports = SERVICE_ORDER
         .iter()
@@ -1280,6 +1301,7 @@ fn show_status(paths: &Paths, profile: &ResolvedProfile) -> OverallStatus {
     }
     println!();
     println!("Migrations: {migrations}");
+    println!("Projection jobs: {}", projection_job_status(paths, profile));
     println!("Latest backup: {latest_backup}");
     println!("Overall: {}", overall.as_str());
 

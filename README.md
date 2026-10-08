@@ -472,6 +472,19 @@ A production setup therefore usually looks like this:
 - the embedding service must be running if you want real semantic embeddings instead of the runtime fallback
 - no horizontal scaling or session-store tuning has been done yet
 
+## Projection Recovery
+
+Projection rebuilds are backed by a durable PostgreSQL queue. Submission and
+moderation changes queue work in the same transaction; the backend processes it
+automatically, including after a restart. Failed jobs retry with exponential
+backoff (2 to 256 seconds), and interrupted jobs become available again after a
+60-second lease. `rimbunctl <PROFILE> status` shows pending, running, and retrying
+jobs for local Docker database profiles. The existing immediate rebuild remains
+in place for responsive publishing; a failed rebuild is repaired asynchronously.
+
+Migration `0018` also queues existing sections with submissions for repair. No
+additional service needs to be started. Recovery runs while the backend is running.
+
 ## Testing
 
 Backend:

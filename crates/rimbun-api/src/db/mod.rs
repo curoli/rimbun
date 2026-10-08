@@ -4,6 +4,7 @@ pub mod drafts;
 pub mod embeddings;
 pub mod moderation;
 pub mod preferences;
+pub mod projection_jobs;
 pub mod projections;
 pub mod sections;
 pub mod sessions;
