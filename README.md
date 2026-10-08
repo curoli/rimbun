@@ -484,6 +484,8 @@ in place for responsive publishing; a failed rebuild is repaired asynchronously.
 
 Migration `0018` also queues existing sections with submissions for repair. No
 additional service needs to be started. Recovery runs while the backend is running.
+Migration `0019` avoids section locks when enqueueing, ignores base-reference-only
+updates, and explicitly removes jobs when a section is deleted.
 
 ## Testing
 
