@@ -5,7 +5,7 @@ use axum::{
 use rimbun_api::{
     app,
     config::Config,
-    db::{projections, sections, submissions},
+    db::{projection_jobs, projections, sections, submissions},
 };
 use rimbun_embedding_client::EmbeddingClient;
 use serde_json::json;
@@ -2322,4 +2322,287 @@ async fn sibling_delete_and_multi_section_import_use_the_same_lock_order() {
         .expect("deletion task")
         .expect("deletion succeeds");
     assert!(deleted);
+}
+
+#[tokio::test]
+async fn durable_projection_jobs_preserve_changes_recover_leases_and_retry() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    reset_schema(&pool).await;
+    let (user_id, _) = seed_user_with_role(&pool, "normal").await;
+    let (_, section_id) = seed_single_section_document(&pool, user_id).await;
+    let submission_id = uuid::Uuid::new_v4();
+    let mut tx = pool.begin().await.expect("begin publication");
+    sqlx::query("insert into submissions (id, section_id, user_id, markdown_content, status) values ($1, $2, $3, 'text', 'published')")
+        .bind(submission_id).bind(section_id).bind(user_id).execute(&mut *tx).await.expect("publish");
+    let queued = sqlx::query_scalar::<_, i64>("select count(*) from projection_jobs")
+        .fetch_one(&mut *tx)
+        .await
+        .expect("read transactional queue");
+    assert_eq!(queued, 1);
+    tx.rollback().await.expect("rollback publication");
+    assert!(
+        projection_jobs::claim(&pool)
+            .await
+            .expect("claim")
+            .is_none()
+    );
+
+    sqlx::query("insert into submissions (id, section_id, user_id, markdown_content, status) values ($1, $2, $3, 'text', 'published')")
+        .bind(submission_id).bind(section_id).bind(user_id).execute(&pool).await.expect("publish durably");
+    let old_job = projection_jobs::claim(&pool)
+        .await
+        .expect("claim")
+        .expect("queued job");
+    assert!(
+        projection_jobs::claim(&pool)
+            .await
+            .expect("second claim")
+            .is_none()
+    );
+
+    sqlx::query("insert into submission_moderation (submission_id, hidden, soft_deleted, excluded_from_clustering) values ($1, false, false, false)")
+        .bind(submission_id).execute(&pool).await.expect("new moderation revision");
+    projection_jobs::finish(&pool, &old_job, None)
+        .await
+        .expect("complete old revision");
+    let newer = projection_jobs::claim(&pool)
+        .await
+        .expect("claim newer")
+        .expect("new work preserved");
+    assert!(newer.revision > old_job.revision);
+    projection_jobs::finish(&pool, &newer, Some("dependency failure"))
+        .await
+        .expect("schedule retry");
+    assert!(
+        projection_jobs::claim(&pool)
+            .await
+            .expect("backoff claim")
+            .is_none()
+    );
+    let state = sqlx::query_as::<_, (i32, Option<String>)>(
+        "select attempts, last_error from projection_jobs where section_id = $1",
+    )
+    .bind(section_id)
+    .fetch_one(&pool)
+    .await
+    .expect("retry state");
+    assert_eq!(state, (1, Some("dependency failure".to_owned())));
+    sqlx::query("update projection_jobs set available_at = now() where section_id = $1")
+        .bind(section_id)
+        .execute(&pool)
+        .await
+        .expect("make retry due");
+    let interrupted = projection_jobs::claim(&pool)
+        .await
+        .expect("claim retry")
+        .expect("due retry");
+    sqlx::query("update projection_jobs set lease_until = now() - interval '1 second' where section_id = $1")
+        .bind(section_id).execute(&pool).await.expect("simulate expired process lease");
+    let recovered = projection_jobs::claim(&pool)
+        .await
+        .expect("recover")
+        .expect("expired lease recovered");
+    assert_ne!(interrupted.lease_token, recovered.lease_token);
+    projection_jobs::finish(&pool, &interrupted, None)
+        .await
+        .expect("stale worker completion");
+    assert!(
+        projection_jobs::claim(&pool)
+            .await
+            .expect("lease still held")
+            .is_none()
+    );
+    projection_jobs::finish(&pool, &recovered, None)
+        .await
+        .expect("finish recovered");
+
+    sqlx::query("update submission_moderation set hidden = false where submission_id = $1")
+        .bind(submission_id)
+        .execute(&pool)
+        .await
+        .expect("queue repair");
+    let client =
+        EmbeddingClient::with_timeout("http://127.0.0.1:9", std::time::Duration::from_millis(50));
+    assert!(
+        projection_jobs::process_next(&pool, &client)
+            .await
+            .expect("repair projection")
+    );
+    assert_eq!(
+        projections::list_by_section(&pool, section_id)
+            .await
+            .expect("projection")
+            .len(),
+        1
+    );
+    assert!(
+        projection_jobs::claim(&pool)
+            .await
+            .expect("queue drained")
+            .is_none()
+    );
+    sqlx::query("delete from submissions where id = $1")
+        .bind(submission_id)
+        .execute(&pool)
+        .await
+        .expect("delete contribution physically");
+    assert!(
+        projection_jobs::process_next(&pool, &client)
+            .await
+            .expect("repair projection after deletion")
+    );
+    assert!(
+        projections::list_by_section(&pool, section_id)
+            .await
+            .expect("empty projection")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn publication_and_external_base_cleanup_do_not_deadlock_with_empty_queue() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    reset_schema(&pool).await;
+    let (user_id, _) = seed_user_with_role(&pool, "normal").await;
+    // Different documents ensure the hierarchy lock sets do not overlap.
+    let (_, section_a) = seed_single_section_document(&pool, user_id).await;
+    let (_, section_b) = seed_single_section_document(&pool, user_id).await;
+    let base_id = uuid::Uuid::new_v4();
+    let contribution_id = uuid::Uuid::new_v4();
+    sqlx::query("insert into submissions (id, section_id, user_id, markdown_content, status) values ($1, $2, $3, 'base', 'published')")
+        .bind(base_id).bind(section_b).bind(user_id).execute(&pool).await.expect("insert base");
+    sqlx::query("insert into submissions (id, section_id, user_id, base_submission_id, markdown_content, status) values ($1, $2, $3, $4, 'external contribution', 'published')")
+        .bind(contribution_id).bind(section_a).bind(user_id).bind(base_id).execute(&pool).await.expect("insert external reference");
+    sqlx::query("delete from projection_jobs where section_id = $1")
+        .bind(section_a)
+        .execute(&pool)
+        .await
+        .expect("drain A queue");
+
+    // Pause deletion at its final queue cleanup, after clearing the external base.
+    let mut gate = pool.begin().await.expect("begin deletion gate");
+    let gate_pid = sqlx::query_scalar::<_, i32>("select pg_backend_pid()")
+        .fetch_one(&mut *gate)
+        .await
+        .expect("gate backend PID");
+    sqlx::query("select section_id from projection_jobs where section_id = $1 for update")
+        .bind(section_b)
+        .execute(&mut *gate)
+        .await
+        .expect("hold B queue row");
+    let mut publication = pool.begin().await.expect("begin import publication");
+    sections::lock_for_update(&mut publication, section_a)
+        .await
+        .expect("import locks A");
+
+    let deletion_pool = pool.clone();
+    let deletion =
+        tokio::spawn(async move { sections::delete_subtree(&deletion_pool, section_b).await });
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let waiting = sqlx::query_scalar::<_, bool>(
+                "select exists(select 1 from pg_stat_activity where $1 = any(pg_blocking_pids(pid)))",
+            ).bind(gate_pid).fetch_one(&pool).await.expect("inspect deletion wait");
+            if waiting { break; }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }).await.expect("deletion reaches queue cleanup without waiting on A");
+
+    let new_submission = submissions::NewSubmission {
+        id: uuid::Uuid::new_v4(),
+        section_id: section_a,
+        user_id,
+        base_submission_id: None,
+        markdown_content: "new publication".to_owned(),
+    };
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        submissions::create(&mut publication, &new_submission),
+    )
+    .await
+    .expect("publication must not wait for deletion's queue insertion")
+    .expect("publication succeeds");
+    publication.commit().await.expect("commit publication");
+    gate.rollback().await.expect("release deletion gate");
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(2), deletion)
+            .await
+            .expect("deletion completes")
+            .expect("deletion task")
+            .expect("deletion succeeds")
+    );
+
+    let base = sqlx::query_scalar::<_, Option<uuid::Uuid>>(
+        "select base_submission_id from submissions where id = $1",
+    )
+    .bind(contribution_id)
+    .fetch_one(&pool)
+    .await
+    .expect("external reference");
+    assert_eq!(base, None);
+    let job_sections =
+        sqlx::query_scalar::<_, uuid::Uuid>("select section_id from projection_jobs")
+            .fetch_all(&pool)
+            .await
+            .expect("remaining queue");
+    assert_eq!(job_sections, vec![section_a]);
+}
+
+#[tokio::test]
+async fn base_reference_cleanup_does_not_queue_projection_work() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    reset_schema(&pool).await;
+    let (user_id, _) = seed_user_with_role(&pool, "normal").await;
+    let (_, section_id) = seed_single_section_document(&pool, user_id).await;
+    let base_id = uuid::Uuid::new_v4();
+    let contribution_id = uuid::Uuid::new_v4();
+    sqlx::query("insert into submissions (id, section_id, user_id, markdown_content, status) values ($1, $2, $3, 'base', 'published')")
+        .bind(base_id).bind(section_id).bind(user_id).execute(&pool).await.expect("insert base");
+    sqlx::query("insert into submissions (id, section_id, user_id, base_submission_id, markdown_content, status) values ($1, $2, $3, $4, 'text', 'published')")
+        .bind(contribution_id).bind(section_id).bind(user_id).bind(base_id).execute(&pool).await.expect("insert contribution");
+    sqlx::query("delete from projection_jobs")
+        .execute(&pool)
+        .await
+        .expect("drain queue");
+    sqlx::query("update submissions set base_submission_id = null where id = $1")
+        .bind(contribution_id)
+        .execute(&pool)
+        .await
+        .expect("clear base reference");
+    assert!(
+        projection_jobs::claim(&pool)
+            .await
+            .expect("no unnecessary work")
+            .is_none()
+    );
+    let mut section_writer = pool.begin().await.expect("begin section writer");
+    sections::lock_for_update(&mut section_writer, section_id)
+        .await
+        .expect("hold section lock");
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        sqlx::query("update submissions set superseded_by = $2 where id = $1")
+            .bind(base_id)
+            .bind(contribution_id)
+            .execute(&pool),
+    )
+    .await
+    .expect("enqueue must not acquire a section lock")
+    .expect("supersede base");
+    section_writer
+        .rollback()
+        .await
+        .expect("release section lock");
+    assert!(
+        projection_jobs::claim(&pool)
+            .await
+            .expect("active set changed")
+            .is_some()
+    );
 }
