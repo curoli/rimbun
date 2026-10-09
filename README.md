@@ -495,6 +495,19 @@ Backend:
 cargo test -p rimbun-api
 ```
 
+To run the database tests, including crash recovery with a real backend process:
+
+```bash
+TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/rimbun_test \
+RIMBUN_REQUIRE_TEST_DATABASE=1 cargo test -p rimbun-api -- --test-threads=1
+```
+
+Use a dedicated test database: the API tests reset its public schema. The process
+recovery test uses a separate temporary schema and waits for the production
+60-second worker lease to expire after killing the backend. It verifies the
+persisted contribution, rebuilt main projection, empty queue, and reading API
+after restart. CI runs this test automatically.
+
 Frontend build check:
 
 ```bash

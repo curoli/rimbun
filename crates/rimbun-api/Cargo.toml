@@ -29,3 +29,6 @@ markalign = "0.2.0"
 
 rimbun-core = { path = "../rimbun-core" }
 rimbun-embedding-client = { path = "../rimbun-embedding-client" }
+
+[dev-dependencies]
+reqwest.workspace = true
