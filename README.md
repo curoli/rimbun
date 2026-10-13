@@ -219,7 +219,8 @@ For `start` and `restart`, it waits until every requested service actually respo
 reporting success. Longer starts print periodic progress updates; the readiness timeout is five
 minutes, which also covers backend recompilation in development.
 `status` reports each configured process and readiness probe, endpoints, PIDs, log paths,
-migration state, the latest backup, and an overall `healthy`, `degraded`, or `stopped` state.
+migration state, projection queue health, the latest backup, and an overall
+`healthy`, `degraded`, or `stopped` state.
 It exits successfully only when the profile is healthy, so it can also be used in scripts.
 `check` performs non-destructive smoke tests for service processes, readiness, migrations, the
 latest backup, the frontend, site settings, the document list, and the first visible document.
@@ -479,7 +480,22 @@ moderation changes queue work in the same transaction; the backend processes it
 automatically, including after a restart. Failed jobs retry with exponential
 backoff (2 to 256 seconds), and interrupted jobs become available again after a
 60-second lease. `rimbunctl <PROFILE> status` shows pending, running, and retrying
-jobs for local Docker database profiles. The existing immediate rebuild remains
+jobs for local Docker database profiles. It also reports expired leases, the age of
+the oldest queued input, the maximum consecutive failed attempts, and the last error
+for the job with the most failures (including its section ID). Pending includes
+running jobs; the other counts are subsets, not additional jobs.
+
+A running profile is `degraded` when a job's latest queued input is at least five
+minutes old or a job has failed at least three times consecutively. A fresh queue,
+including active processing or one-off retries, does not degrade the profile.
+Queue age uses `updated_at`: new submission/moderation changes reset it, while
+worker claims and retries do not. Unknown queue health (including an unavailable
+database or an external database that this command cannot inspect) also prevents
+a `healthy` result. Fully stopped profiles still report `stopped`. Queue queries
+have a three-second PostgreSQL statement timeout and a five-second command timeout
+(GNU `timeout` must be installed).
+
+The existing immediate rebuild remains
 in place for responsive publishing; a failed rebuild is repaired asynchronously.
 
 Migration `0018` also queues existing sections with submissions for repair. No
