@@ -21,6 +21,8 @@ use nix::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+mod projection_status;
+
 const SERVICE_ORDER: [ServiceName; 4] = [
     ServiceName::Db,
     ServiceName::Embedding,
@@ -1039,13 +1041,13 @@ fn collect_service_status(
     }
 }
 
-fn classify_status(reports: &[ServiceStatusReport], migrations_healthy: bool) -> OverallStatus {
+fn classify_status(reports: &[ServiceStatusReport], checks_healthy: bool) -> OverallStatus {
     if reports.is_empty() {
         OverallStatus::Stopped
     } else if reports
         .iter()
         .all(|report| report.process == "running" && report.readiness == "ready")
-        && migrations_healthy
+        && checks_healthy
     {
         OverallStatus::Healthy
     } else if reports
@@ -1245,24 +1247,26 @@ fn latest_backup(paths: &Paths) -> (String, bool) {
     )
 }
 
-fn projection_job_status(paths: &Paths, profile: &ResolvedProfile) -> String {
+fn projection_job_status(paths: &Paths, profile: &ResolvedProfile) -> (String, bool) {
     let Some(db_name) = profile.vars.get("db_name") else {
-        return "unknown (database name missing)".to_owned();
+        return ("unknown (database name missing)".to_owned(), false);
     };
     if !profile.services.contains_key(&ServiceName::Db) {
-        return "not checked (external database)".to_owned();
+        return ("not checked (external database)".to_owned(), false);
     }
-    let query = "SELECT count(*) || ' pending, ' || count(*) FILTER (WHERE lease_until > now()) || ' running, ' || count(*) FILTER (WHERE last_error IS NOT NULL) || ' awaiting retry' FROM projection_jobs";
     let command = format!(
-        "docker compose exec -T postgres psql -U postgres -d {} -tAc {}",
+        "timeout --kill-after=1s 5s docker compose exec -T -e PGOPTIONS='-c statement_timeout=3000' postgres psql -X -v ON_ERROR_STOP=1 -U postgres -d {} -tAc {}",
         shell_quote(db_name),
-        shell_quote(query)
+        shell_quote(projection_status::QUERY)
     );
     match shell_command(&command, &paths.repo_root, &profile.env).output() {
         Ok(output) if output.status.success() => {
-            String::from_utf8_lossy(&output.stdout).trim().to_owned()
+            match projection_status::QueueStatus::parse(&output.stdout) {
+                Ok(status) => (status.summary(), status.healthy()),
+                Err(_) => ("unknown (unexpected job data)".to_owned(), false),
+            }
         }
-        _ => "unknown (job query failed)".to_owned(),
+        _ => ("unknown (job query failed or timed out)".to_owned(), false),
     }
 }
 
@@ -1275,7 +1279,11 @@ fn show_status(paths: &Paths, profile: &ResolvedProfile) -> OverallStatus {
         .collect::<Vec<_>>();
     let (migrations, migrations_healthy) = migration_status(paths, profile);
     let (latest_backup, backup_healthy) = latest_backup(paths);
-    let overall = classify_status(&reports, migrations_healthy && backup_healthy);
+    let (projection_jobs, projections_healthy) = projection_job_status(paths, profile);
+    let overall = classify_status(
+        &reports,
+        migrations_healthy && backup_healthy && projections_healthy,
+    );
 
     println!("Profile: {}", profile.profile_name);
     println!("State:   {}", paths.state_dir.display());
@@ -1301,7 +1309,7 @@ fn show_status(paths: &Paths, profile: &ResolvedProfile) -> OverallStatus {
     }
     println!();
     println!("Migrations: {migrations}");
-    println!("Projection jobs: {}", projection_job_status(paths, profile));
+    println!("Projection jobs: {projection_jobs}");
     println!("Latest backup: {latest_backup}");
     println!("Overall: {}", overall.as_str());
 
@@ -3616,6 +3624,32 @@ mod tests {
         assert_eq!(classify_status(&[], true), OverallStatus::Stopped);
         assert_eq!(classify_status(&stopped, false), OverallStatus::Stopped);
         assert_eq!(classify_status(&orphaned, true), OverallStatus::Degraded);
+    }
+
+    #[test]
+    fn queue_health_affects_running_but_not_fully_stopped_profiles() {
+        let running = vec![status_report("running", "ready")];
+        let stopped = vec![status_report("stopped", "not-ready")];
+        for (age, attempts, expected) in [
+            (0, 0, OverallStatus::Healthy),
+            (299, 2, OverallStatus::Healthy),
+            (300, 0, OverallStatus::Degraded),
+            (0, 3, OverallStatus::Degraded),
+        ] {
+            let data = serde_json::json!({
+                "pending": 1, "running": 0, "failed": 0, "expired_leases": 0,
+                "oldest_seconds": age, "max_attempts": attempts, "failure": null
+            });
+            let queue =
+                projection_status::QueueStatus::parse(&serde_json::to_vec(&data).unwrap()).unwrap();
+            assert_eq!(classify_status(&running, queue.healthy()), expected);
+            assert_eq!(
+                classify_status(&stopped, queue.healthy()),
+                OverallStatus::Stopped
+            );
+        }
+        // Unknown queue health is supplied as false by the collector.
+        assert_eq!(classify_status(&running, false), OverallStatus::Degraded);
     }
 
     #[test]
