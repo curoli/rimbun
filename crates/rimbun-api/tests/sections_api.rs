@@ -2351,6 +2351,9 @@ async fn durable_projection_jobs_preserve_changes_recover_leases_and_retry() {
 
     sqlx::query("insert into submissions (id, section_id, user_id, markdown_content, status) values ($1, $2, $3, 'text', 'published')")
         .bind(submission_id).bind(section_id).bind(user_id).execute(&pool).await.expect("publish durably");
+    let waiting_since = sqlx::query_scalar::<_, chrono::DateTime<chrono::Utc>>(
+        "update projection_jobs set queued_at = now() - interval '10 minutes' where section_id = $1 returning queued_at",
+    ).bind(section_id).fetch_one(&pool).await.expect("simulate an old outstanding job");
     let old_job = projection_jobs::claim(&pool)
         .await
         .expect("claim")
@@ -2362,11 +2365,37 @@ async fn durable_projection_jobs_preserve_changes_recover_leases_and_retry() {
             .is_none()
     );
 
+    for text in ["first update", "second update", "third update"] {
+        sqlx::query("update submissions set markdown_content = $2 where id = $1")
+            .bind(submission_id)
+            .bind(text)
+            .execute(&pool)
+            .await
+            .expect("new contribution input");
+        let state = sqlx::query_as::<_, (chrono::DateTime<chrono::Utc>, bool)>(
+            "select queued_at, updated_at > queued_at from projection_jobs where section_id = $1",
+        )
+        .bind(section_id)
+        .fetch_one(&pool)
+        .await
+        .expect("queue age after input update");
+        assert_eq!(
+            state,
+            (waiting_since, true),
+            "new input must preserve the original wait"
+        );
+    }
+
     sqlx::query("insert into submission_moderation (submission_id, hidden, soft_deleted, excluded_from_clustering) values ($1, false, false, false)")
         .bind(submission_id).execute(&pool).await.expect("new moderation revision");
     projection_jobs::finish(&pool, &old_job, None)
         .await
         .expect("complete old revision");
+    assert_eq!(
+        queued_at(&pool, section_id).await,
+        waiting_since,
+        "an outdated success must not reset the wait"
+    );
     let newer = projection_jobs::claim(&pool)
         .await
         .expect("claim newer")
@@ -2389,6 +2418,11 @@ async fn durable_projection_jobs_preserve_changes_recover_leases_and_retry() {
     .await
     .expect("retry state");
     assert_eq!(state, (1, Some("dependency failure".to_owned())));
+    assert_eq!(
+        queued_at(&pool, section_id).await,
+        waiting_since,
+        "retry must preserve the wait"
+    );
     sqlx::query("update projection_jobs set available_at = now() where section_id = $1")
         .bind(section_id)
         .execute(&pool)
@@ -2405,9 +2439,19 @@ async fn durable_projection_jobs_preserve_changes_recover_leases_and_retry() {
         .expect("recover")
         .expect("expired lease recovered");
     assert_ne!(interrupted.lease_token, recovered.lease_token);
+    assert_eq!(
+        queued_at(&pool, section_id).await,
+        waiting_since,
+        "lease recovery must preserve the wait"
+    );
     projection_jobs::finish(&pool, &interrupted, None)
         .await
         .expect("stale worker completion");
+    assert_eq!(
+        queued_at(&pool, section_id).await,
+        waiting_since,
+        "a stale worker cannot reset the wait"
+    );
     assert!(
         projection_jobs::claim(&pool)
             .await
@@ -2417,12 +2461,26 @@ async fn durable_projection_jobs_preserve_changes_recover_leases_and_retry() {
     projection_jobs::finish(&pool, &recovered, None)
         .await
         .expect("finish recovered");
+    assert!(
+        projection_jobs::claim(&pool)
+            .await
+            .expect("completed queue")
+            .is_none()
+    );
 
+    let requeue_started: chrono::DateTime<chrono::Utc> = sqlx::query_scalar("select now()")
+        .fetch_one(&pool)
+        .await
+        .expect("time before fresh input");
     sqlx::query("update submission_moderation set hidden = false where submission_id = $1")
         .bind(submission_id)
         .execute(&pool)
         .await
         .expect("queue repair");
+    assert!(
+        queued_at(&pool, section_id).await >= requeue_started,
+        "input after completion starts a fresh wait"
+    );
     let client =
         EmbeddingClient::with_timeout("http://127.0.0.1:9", std::time::Duration::from_millis(50));
     assert!(
@@ -2459,6 +2517,14 @@ async fn durable_projection_jobs_preserve_changes_recover_leases_and_retry() {
             .expect("empty projection")
             .is_empty()
     );
+}
+
+async fn queued_at(pool: &PgPool, section_id: uuid::Uuid) -> chrono::DateTime<chrono::Utc> {
+    sqlx::query_scalar("select queued_at from projection_jobs where section_id = $1")
+        .bind(section_id)
+        .fetch_one(pool)
+        .await
+        .expect("read persistent queue age")
 }
 
 #[tokio::test]
