@@ -11,7 +11,7 @@ select json_build_object(
     'running', count(*) filter (where lease_until > now()),
     'failed', count(*) filter (where last_error is not null),
     'expired_leases', count(*) filter (where lease_until <= now()),
-    'oldest_seconds', coalesce(floor(greatest(0, extract(epoch from now() - min(updated_at)))), 0),
+    'oldest_seconds', coalesce(floor(greatest(0, extract(epoch from now() - min(queued_at)))), 0),
     'max_attempts', coalesce(max(attempts), 0),
     'failure', (select json_build_object('section_id', section_id, 'attempts', attempts,
                     'message', left(last_error, 600))
@@ -139,6 +139,25 @@ mod tests {
         // A temporary table shadows the real queue without touching project data.
         sqlx::query("create temporary table projection_jobs (section_id uuid, attempts integer not null default 0, lease_until timestamptz, last_error text, updated_at timestamptz not null default now()) on commit drop")
             .execute(&mut *tx).await?;
+        sqlx::query("insert into projection_jobs(section_id, updated_at) values ('00000000-0000-0000-0000-000000000003', now() - interval '600 seconds')")
+            .execute(&mut *tx).await?;
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/0020_projection_queue_age.sql"
+        ))
+        .execute(&mut *tx)
+        .await?;
+        let backfilled: serde_json::Value = sqlx::query_scalar(QUERY).fetch_one(&mut *tx).await?;
+        let report = QueueStatus::parse(&serde_json::to_vec(&backfilled)?)?;
+        assert_eq!(report.oldest_seconds, 600);
+        assert!(!report.healthy());
+        let preserved: bool =
+            sqlx::query_scalar("select queued_at = updated_at from projection_jobs")
+                .fetch_one(&mut *tx)
+                .await?;
+        assert!(preserved);
+        sqlx::query("delete from projection_jobs")
+            .execute(&mut *tx)
+            .await?;
         let empty: serde_json::Value = sqlx::query_scalar(QUERY).fetch_one(&mut *tx).await?;
         let report = QueueStatus::parse(&serde_json::to_vec(&empty)?)?;
         assert!(report.healthy());
@@ -152,7 +171,7 @@ mod tests {
         assert!(report.healthy());
         assert_eq!(report.running, 1);
 
-        sqlx::query("insert into projection_jobs(section_id, attempts, last_error, lease_until, updated_at) values ('00000000-0000-0000-0000-000000000002', 3, 'embedding unavailable', now() - interval '1 second', now() - interval '300 seconds')")
+        sqlx::query("insert into projection_jobs(section_id, attempts, last_error, lease_until, queued_at) values ('00000000-0000-0000-0000-000000000002', 3, 'embedding unavailable', now() - interval '1 second', now() - interval '300 seconds')")
             .execute(&mut *tx).await?;
         let failed: serde_json::Value = sqlx::query_scalar(QUERY).fetch_one(&mut *tx).await?;
         let report = QueueStatus::parse(&serde_json::to_vec(&failed)?)?;
@@ -165,7 +184,17 @@ mod tests {
         assert_eq!(report.max_attempts, 3);
         assert!(report.summary().contains("embedding unavailable"));
 
-        sqlx::query("update projection_jobs set attempts = 2, updated_at = now() - interval '299 seconds' where last_error is not null")
+        sqlx::query("update projection_jobs set attempts = 0, updated_at = now() where last_error is not null")
+            .execute(&mut *tx).await?;
+        let changed: serde_json::Value = sqlx::query_scalar(QUERY).fetch_one(&mut *tx).await?;
+        let report = QueueStatus::parse(&serde_json::to_vec(&changed)?)?;
+        assert_eq!(report.oldest_seconds, 300);
+        assert!(
+            !report.healthy(),
+            "fresh input must not hide old queued work"
+        );
+
+        sqlx::query("update projection_jobs set attempts = 2, queued_at = now() - interval '299 seconds' where last_error is not null")
             .execute(&mut *tx).await?;
         let retry: serde_json::Value = sqlx::query_scalar(QUERY).fetch_one(&mut *tx).await?;
         assert!(QueueStatus::parse(&serde_json::to_vec(&retry)?)?.healthy());

@@ -180,6 +180,12 @@ async fn exercise_restart(pool: &PgPool, database_url: &str, files: &TestFiles) 
     .fetch_one(pool)
     .await?;
     ensure!(lease.1, "worker must have an active lease before the crash");
+    let queued_at = sqlx::query_scalar::<_, chrono::DateTime<chrono::Utc>>(
+        "select queued_at from projection_jobs where section_id = $1",
+    )
+    .bind(section_id)
+    .fetch_one(pool)
+    .await?;
     let projection_count = sqlx::query_scalar::<_, i64>(
         "select count(*) from section_projection_items where section_id = $1",
     )
@@ -218,6 +224,17 @@ async fn exercise_restart(pool: &PgPool, database_url: &str, files: &TestFiles) 
     )
     .await?;
     restarted.ready(&client).await?;
+
+    let after_restart = sqlx::query_scalar::<_, chrono::DateTime<chrono::Utc>>(
+        "select queued_at from projection_jobs where section_id = $1",
+    )
+    .bind(section_id)
+    .fetch_one(pool)
+    .await?;
+    ensure!(
+        after_restart == queued_at,
+        "backend restart must preserve the original queue age"
+    );
 
     // Use the actual production lease expiry; do not edit queue timestamps.
     tokio::time::timeout(Duration::from_secs(80), async {

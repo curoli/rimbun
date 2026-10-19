@@ -481,16 +481,20 @@ automatically, including after a restart. Failed jobs retry with exponential
 backoff (2 to 256 seconds), and interrupted jobs become available again after a
 60-second lease. `rimbunctl <PROFILE> status` shows pending, running, and retrying
 jobs for local Docker database profiles. It also reports expired leases, the age of
-the oldest queued input, the maximum consecutive failed attempts, and the last error
+the oldest outstanding job, the maximum consecutive failed attempts, and the last error
 for the job with the most failures (including its section ID). Pending includes
 running jobs; the other counts are subsets, not additional jobs.
 
-A running profile is `degraded` when a job's latest queued input is at least five
-minutes old or a job has failed at least three times consecutively. A fresh queue,
+A running profile is `degraded` when a job has been outstanding for at least five
+minutes or a job has failed at least three times consecutively. A fresh queue,
 including active processing or one-off retries, does not degrade the profile.
-Queue age uses `updated_at`: new submission/moderation changes reset it, while
-worker claims and retries do not. Unknown queue health (including an unavailable
-database or an external database that this command cannot inspect) also prevents
+Queue age uses `queued_at`: new submission/moderation changes, worker claims,
+retries, and restarts do not reset it. Completing an outdated revision or work from
+a worker whose lease has been reclaimed does not clear the age either. Only
+successful processing of the current job removes it; later input starts a fresh
+waiting interval.
+Unknown queue health (including an unavailable database or an external database
+that this command cannot inspect) also prevents
 a `healthy` result. Fully stopped profiles still report `stopped`. Queue queries
 have a three-second PostgreSQL statement timeout and a five-second command timeout
 (GNU `timeout` must be installed).
@@ -502,6 +506,9 @@ Migration `0018` also queues existing sections with submissions for repair. No
 additional service needs to be started. Recovery runs while the backend is running.
 Migration `0019` avoids section locks when enqueueing, ignores base-reference-only
 updates, and explicitly removes jobs when a section is deleted.
+Migration `0020` adds the persistent enqueue timestamp. Existing jobs inherit
+`updated_at`, their last known input timestamp; their original
+enqueue time before migration cannot be reconstructed.
 
 ## Testing
 
