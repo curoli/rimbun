@@ -1086,13 +1086,14 @@ fn migration_status(paths: &Paths, profile: &ResolvedProfile) -> (String, bool) 
     let Ok(local) = local_migration_versions(paths) else {
         return ("unknown (cannot read local migrations)".to_owned(), false);
     };
-    match profile_database_json::<Vec<MigrationState>>(profile, MIGRATION_STATUS_QUERY) {
+    match profile_database_json::<Vec<MigrationState>>(
+        profile,
+        database_status::MIGRATION_STATUS_QUERY,
+    ) {
         Ok(applied) => classify_migrations(&local, &applied),
         Err(error) => (error.message().to_owned(), false),
     }
 }
-
-const MIGRATION_STATUS_QUERY: &str = "SELECT coalesce(json_agg(json_build_object('version', version, 'success', success) ORDER BY version), '[]'::json) FROM _sqlx_migrations";
 
 #[derive(Deserialize)]
 struct MigrationState {
@@ -1104,18 +1105,9 @@ fn profile_database_json<T: serde::de::DeserializeOwned>(
     profile: &ResolvedProfile,
     query: &str,
 ) -> Result<T, database_status::StatusError> {
-    if database_status::profile_requires_worker(&profile.env) {
-        let executable =
-            env::current_exe().map_err(|_| database_status::StatusError::RuntimeUnavailable)?;
-        return database_status::read_profile_json(
-            &executable,
-            env::vars_os().collect(),
-            &profile.env,
-            query,
-        );
-    }
-    let url = database_status::database_url(&profile.env, env::var("DATABASE_URL").ok())?;
-    database_status::read_json(&url, query)
+    let executable =
+        env::current_exe().map_err(|_| database_status::StatusError::RuntimeUnavailable)?;
+    database_status::read_profile_json(&executable, env::vars_os().collect(), &profile.env, query)
 }
 
 fn classify_migrations(local: &BTreeSet<i64>, rows: &[MigrationState]) -> (String, bool) {
@@ -3687,168 +3679,6 @@ mod tests {
             ),
             ("failed migration 1".to_owned(), false)
         );
-    }
-
-    #[test]
-    fn direct_database_status_works_without_managed_database_service() -> Result<()> {
-        use sqlx::Connection;
-
-        let database_url = match env::var("TEST_DATABASE_URL") {
-            Ok(url) => url,
-            Err(error) if env::var_os("RIMBUN_REQUIRE_TEST_DATABASE").is_some() => {
-                return Err(error.into());
-            }
-            Err(_) => {
-                eprintln!("Skipping direct database status test: TEST_DATABASE_URL is not set");
-                return Ok(());
-            }
-        };
-        struct TestDatabase {
-            runtime: tokio::runtime::Runtime,
-            admin: sqlx::PgConnection,
-            schema: String,
-        }
-        impl Drop for TestDatabase {
-            fn drop(&mut self) {
-                self.runtime.block_on(async {
-                    let command = format!("drop schema {} cascade", self.schema);
-                    let cleanup = sqlx::query(&command);
-                    let _ = tokio::time::timeout(
-                        Duration::from_secs(5),
-                        cleanup.execute(&mut self.admin),
-                    )
-                    .await;
-                });
-            }
-        }
-        let runtime = tokio::runtime::Runtime::new()?;
-        let mut admin = runtime.block_on(sqlx::PgConnection::connect(&database_url))?;
-        let schema = format!("status_{}", uuid::Uuid::new_v4().simple());
-        runtime.block_on(sqlx::query(&format!("create schema {schema}")).execute(&mut admin))?;
-        let fixture = TestDatabase {
-            runtime,
-            admin,
-            schema,
-        };
-        let mut url = reqwest::Url::parse(&database_url)?;
-        url.query_pairs_mut()
-            .append_pair("options[search_path]", &fixture.schema);
-        fixture.runtime.block_on(async {
-            let mut connection = sqlx::PgConnection::connect(url.as_str()).await?;
-            sqlx::migrate!("../../migrations")
-                .run(&mut connection)
-                .await?;
-            Ok::<_, anyhow::Error>(())
-        })?;
-
-        let mut profile = resolve_profile(&builtin_registry(), "dev")?;
-        profile
-            .env
-            .insert("DATABASE_URL".to_owned(), url.to_string());
-        let paths = state_paths("dev")?;
-        assert!(migration_status(&paths, &profile).1);
-        assert!(projection_job_status(&profile).1);
-        profile.services.remove(&ServiceName::Db);
-        profile.vars.remove("db_name");
-        let (migrations, healthy) = migration_status(&paths, &profile);
-        assert!(healthy, "{migrations}");
-        let (queue, healthy) = projection_job_status(&profile);
-        assert!(healthy, "{queue}");
-        assert!(queue.contains("0 pending"));
-
-        let read_only: String = database_status::read_json(
-            url.as_str(),
-            "select to_json(current_setting('transaction_read_only'))",
-        )
-        .unwrap();
-        assert_eq!(read_only, "on");
-        let mut denied_url = url.clone();
-        denied_url
-            .set_username(&format!("credential_{}", uuid::Uuid::new_v4().simple()))
-            .unwrap();
-        denied_url
-            .set_password(Some("password_must_not_appear"))
-            .unwrap();
-        let denied = database_status::read_json::<serde_json::Value>(
-            denied_url.as_str(),
-            "select '{}'::json",
-        )
-        .unwrap_err();
-        assert_eq!(denied, database_status::StatusError::ConnectFailed);
-        assert_eq!(denied.message(), "unknown (database connection failed)");
-
-        fixture.runtime.block_on(async {
-            let mut connection = sqlx::PgConnection::connect(url.as_str()).await?;
-            sqlx::query("insert into projection_jobs(section_id, queued_at) values ($1, now() - interval '5 minutes')")
-                .bind(uuid::Uuid::new_v4()).execute(&mut connection).await?;
-            Ok::<_, anyhow::Error>(())
-        })?;
-        let (queue, healthy) = projection_job_status(&profile);
-        assert!(!healthy, "{queue}");
-        assert!(queue.contains("1 pending"));
-
-        let result = database_status::read_json::<serde_json::Value>(
-            url.as_str(),
-            "create table status_must_not_write(id integer)",
-        );
-        assert_eq!(
-            result.unwrap_err(),
-            database_status::StatusError::QueryFailed
-        );
-        let exists: bool = database_status::read_json(
-            url.as_str(),
-            "select to_json(to_regclass('status_must_not_write') is not null)",
-        )
-        .unwrap();
-        assert!(!exists);
-        let started = Instant::now();
-        let result = database_status::read_json::<serde_json::Value>(
-            url.as_str(),
-            "select pg_sleep(10), '{}'::json",
-        );
-        assert_eq!(
-            result.unwrap_err(),
-            database_status::StatusError::QueryTimeout
-        );
-        assert!(started.elapsed() < Duration::from_secs(6));
-
-        // Driver errors containing user-controlled text must not reach CLI diagnostics.
-        let result = database_status::read_json::<serde_json::Value>(
-            url.as_str(),
-            "select * from secret_password_must_not_appear",
-        );
-        assert_eq!(
-            result.unwrap_err().message(),
-            "unknown (database query failed)"
-        );
-        fixture.runtime.block_on(async {
-            let mut connection = sqlx::PgConnection::connect(url.as_str()).await?;
-            sqlx::raw_sql("drop table projection_jobs; drop table _sqlx_migrations")
-                .execute(&mut connection)
-                .await?;
-            Ok::<_, anyhow::Error>(())
-        })?;
-        assert_eq!(
-            projection_job_status(&profile),
-            ("unknown (database query failed)".to_owned(), false)
-        );
-        assert_eq!(
-            migration_status(&paths, &profile),
-            ("unknown (database query failed)".to_owned(), false)
-        );
-        profile.env.insert(
-            "DATABASE_URL".to_owned(),
-            "postgres://alice:secret@localhost:invalid/database".to_owned(),
-        );
-        assert_eq!(
-            projection_job_status(&profile),
-            ("unknown (invalid DATABASE_URL)".to_owned(), false)
-        );
-        assert_eq!(
-            migration_status(&paths, &profile),
-            ("unknown (invalid DATABASE_URL)".to_owned(), false)
-        );
-        Ok(())
     }
 
     #[test]

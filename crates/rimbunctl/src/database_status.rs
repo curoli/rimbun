@@ -13,6 +13,7 @@ use sqlx::{ConnectOptions, Connection, PgConnection, postgres::PgConnectOptions}
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 const QUERY_TIMEOUT: Duration = Duration::from_secs(3);
 pub const WORKER_ARGUMENT: &str = "--internal-database-status";
+pub const MIGRATION_STATUS_QUERY: &str = "SELECT coalesce(json_agg(json_build_object('version', version, 'success', success) ORDER BY version), '[]'::json) FROM _sqlx_migrations";
 
 // Never expose driver errors: connection URLs and server messages may contain secrets.
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,14 +25,6 @@ pub enum StatusError {
     QueryFailed,
     QueryTimeout,
     RuntimeUnavailable,
-}
-
-pub fn profile_requires_worker(profile_env: &BTreeMap<String, String>) -> bool {
-    // SQLx reads PG* defaults and password-file locations from process environment.
-    // A URL-only override can use the parent; other overrides need isolation.
-    profile_env.keys().any(|key| {
-        key.starts_with("PG") || matches!(key.as_str(), "HOME" | "USERPROFILE" | "APPDATA")
-    })
 }
 
 pub fn read_profile_json<T: DeserializeOwned>(
@@ -67,8 +60,7 @@ pub fn read_profile_json<T: DeserializeOwned>(
         .write_all(query.as_bytes())
         .is_err()
     {
-        let _ = child.kill();
-        let _ = child.wait();
+        terminate_worker(child);
         return Err(StatusError::RuntimeUnavailable);
     }
     let stdout = child.stdout.take().unwrap();
@@ -85,9 +77,9 @@ pub fn read_profile_json<T: DeserializeOwned>(
             Ok(Some(status)) => break status.success(),
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
             _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = reader.join();
+                // A stalled filesystem must not turn kill/reaping or pipe cleanup
+                // into another unbounded wait on the caller's deadline path.
+                terminate_worker(child);
                 return Err(StatusError::QueryTimeout);
             }
         }
@@ -103,6 +95,13 @@ pub fn read_profile_json<T: DeserializeOwned>(
     let result: Result<serde_json::Value, StatusError> =
         serde_json::from_slice(&output).map_err(|_| StatusError::RuntimeUnavailable)?;
     result.and_then(|value| serde_json::from_value(value).map_err(|_| StatusError::QueryFailed))
+}
+
+fn terminate_worker(mut child: std::process::Child) {
+    let _ = child.kill();
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
 }
 
 pub fn run_worker() -> std::process::ExitCode {
@@ -148,7 +147,7 @@ pub fn database_url(
         .ok_or(StatusError::MissingUrl)
 }
 
-pub fn read_json<T: DeserializeOwned>(url: &str, query: &str) -> Result<T, StatusError> {
+fn read_json<T: DeserializeOwned>(url: &str, query: &str) -> Result<T, StatusError> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -198,31 +197,6 @@ async fn read_json_async(url: &str, query: &str) -> Result<serde_json::Value, St
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn postgres_and_home_overrides_require_environment_isolation() {
-        for key in [
-            "PGPASSWORD",
-            "PGSSLMODE",
-            "PGSSLROOTCERT",
-            "PGSSLCERT",
-            "PGSSLKEY",
-            "PGOPTIONS",
-            "PGPASSFILE",
-            "HOME",
-            "USERPROFILE",
-            "APPDATA",
-        ] {
-            assert!(
-                profile_requires_worker(&BTreeMap::from([(key.to_owned(), String::new())])),
-                "{key}"
-            );
-        }
-        assert!(!profile_requires_worker(&BTreeMap::from([(
-            "DATABASE_URL".to_owned(),
-            "url".to_owned()
-        )])));
-    }
 
     #[test]
     fn database_url_matches_service_environment_precedence() {

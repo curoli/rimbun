@@ -225,10 +225,11 @@ It exits successfully only when the profile is healthy, so it can also be used i
 Migration and projection-queue checks connect directly to `DATABASE_URL`, for both
 local and external PostgreSQL databases; no Docker, `psql`, or GNU `timeout` is
 needed for these checks. The profile's `env.DATABASE_URL` takes precedence over
-the invoking environment, just as for managed services. Profile overrides of
-PostgreSQL variables (including `PGPASSWORD`, `PGSSLMODE`, `PGSSLROOTCERT`, and
-`PGOPTIONS`) and password-file home paths are applied in an isolated CLI helper
-process with the complete merged environment. SQLx therefore uses the same
+the invoking environment, just as for managed services. All production database
+checks run in an isolated CLI helper process with the complete merged environment,
+including inherited and profile-specific PostgreSQL variables (`PGPASSWORD`,
+`PGSSLMODE`, `PGSSLROOTCERT`, `PGOPTIONS`) and password-file home paths.
+SQLx therefore uses the same
 credentials, TLS settings and password-file rules as the backend, without changing
 the parent process environment. Explicit connection-URL options retain SQLx's
 precedence over environment defaults. A missing or invalid URL
@@ -236,7 +237,8 @@ is reported as unknown rather than falling back to another database. TLS setting
 such as `sslmode=verify-full` and `sslrootcert` can be supplied in the connection URL.
 Connections have a two-second deadline; each read-only transaction has a
 three-second client deadline and PostgreSQL statement timeout. Connection failures
-are also bounded by a six-second parent deadline when a helper is needed. Failures
+are also bounded by a six-second parent deadline, including synchronous password-file
+and configuration reads before connection setup. Failures
 are reported without including the URL, credentials, or database-server messages.
 The database role needs `SELECT` access to `_sqlx_migrations` and `projection_jobs`.
 `check` performs non-destructive smoke tests for service processes, readiness, migrations, the
