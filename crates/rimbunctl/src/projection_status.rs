@@ -1,3 +1,4 @@
+#[cfg(test)]
 use anyhow::Result;
 use serde::Deserialize;
 
@@ -39,6 +40,7 @@ struct JobFailure {
 }
 
 impl QueueStatus {
+    #[cfg(test)]
     pub fn parse(raw: &[u8]) -> Result<Self> {
         Ok(serde_json::from_slice(raw)?)
     }

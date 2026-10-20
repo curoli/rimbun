@@ -222,6 +222,16 @@ minutes, which also covers backend recompilation in development.
 migration state, projection queue health, the latest backup, and an overall
 `healthy`, `degraded`, or `stopped` state.
 It exits successfully only when the profile is healthy, so it can also be used in scripts.
+Migration and projection-queue checks connect directly to `DATABASE_URL`, for both
+local and external PostgreSQL databases; no Docker, `psql`, or GNU `timeout` is
+needed for these checks. The profile's `env.DATABASE_URL` takes precedence over
+the invoking environment, just as for managed services. A missing or invalid URL
+is reported as unknown rather than falling back to another database. TLS settings
+such as `sslmode=verify-full` and `sslrootcert` can be supplied in the connection URL.
+Connections have a two-second deadline; each read-only transaction has a
+three-second client deadline and PostgreSQL statement timeout. Connection failures
+are reported without including the URL, credentials, or database-server messages.
+The database role needs `SELECT` access to `_sqlx_migrations` and `projection_jobs`.
 `check` performs non-destructive smoke tests for service processes, readiness, migrations, the
 latest backup, the frontend, site settings, the document list, and the first visible document.
 Set `RIMBUN_CHECK_USERNAME` and `RIMBUN_CHECK_PASSWORD` in the invoking environment to
@@ -480,7 +490,7 @@ moderation changes queue work in the same transaction; the backend processes it
 automatically, including after a restart. Failed jobs retry with exponential
 backoff (2 to 256 seconds), and interrupted jobs become available again after a
 60-second lease. `rimbunctl <PROFILE> status` shows pending, running, and retrying
-jobs for local Docker database profiles. It also reports expired leases, the age of
+jobs for local and external PostgreSQL profiles. It also reports expired leases, the age of
 the oldest outstanding job, the maximum consecutive failed attempts, and the last error
 for the job with the most failures (including its section ID). Pending includes
 running jobs; the other counts are subsets, not additional jobs.
@@ -493,11 +503,9 @@ retries, and restarts do not reset it. Completing an outdated revision or work f
 a worker whose lease has been reclaimed does not clear the age either. Only
 successful processing of the current job removes it; later input starts a fresh
 waiting interval.
-Unknown queue health (including an unavailable database or an external database
-that this command cannot inspect) also prevents
-a `healthy` result. Fully stopped profiles still report `stopped`. Queue queries
-have a three-second PostgreSQL statement timeout and a five-second command timeout
-(GNU `timeout` must be installed).
+Unknown queue health (including an unavailable database) also prevents a `healthy`
+result. Fully stopped profiles still report `stopped`. Migration and queue queries
+use the configured `DATABASE_URL` with the read-only deadlines described above.
 
 The existing immediate rebuild remains
 in place for responsive publishing; a failed rebuild is repaired asynchronously.
