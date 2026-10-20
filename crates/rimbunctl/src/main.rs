@@ -21,6 +21,7 @@ use nix::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+mod database_status;
 mod projection_status;
 
 const SERVICE_ORDER: [ServiceName; 4] = [
@@ -1082,45 +1083,45 @@ fn local_migration_versions(paths: &Paths) -> Result<BTreeSet<i64>> {
 }
 
 fn migration_status(paths: &Paths, profile: &ResolvedProfile) -> (String, bool) {
-    if !profile.services.contains_key(&ServiceName::Db) {
-        return ("not checked (external database)".to_owned(), true);
-    }
-    let Some(db_name) = profile.vars.get("db_name") else {
-        return ("unknown (database name missing)".to_owned(), false);
-    };
     let Ok(local) = local_migration_versions(paths) else {
         return ("unknown (cannot read local migrations)".to_owned(), false);
     };
-    let query = "SELECT version || ':' || success FROM _sqlx_migrations ORDER BY version";
-    let command = format!(
-        "docker compose exec -T postgres psql -U postgres -d {} -tAc {}",
-        shell_quote(db_name),
-        shell_quote(query)
-    );
-    let Ok(output) = shell_command(&command, &paths.repo_root, &profile.env).output() else {
-        return ("unknown (migration query failed)".to_owned(), false);
-    };
-    if !output.status.success() {
-        return ("unknown (migration query failed)".to_owned(), false);
+    match profile_database_json::<Vec<MigrationState>>(
+        profile,
+        database_status::MIGRATION_STATUS_QUERY,
+    ) {
+        Ok(applied) => classify_migrations(&local, &applied),
+        Err(error) => (error.message().to_owned(), false),
     }
+}
 
+#[derive(Deserialize)]
+struct MigrationState {
+    version: i64,
+    success: bool,
+}
+
+fn profile_database_json<T: serde::de::DeserializeOwned>(
+    profile: &ResolvedProfile,
+    query: &str,
+) -> Result<T, database_status::StatusError> {
+    let executable =
+        env::current_exe().map_err(|_| database_status::StatusError::RuntimeUnavailable)?;
+    database_status::read_profile_json(&executable, env::vars_os().collect(), &profile.env, query)
+}
+
+fn classify_migrations(local: &BTreeSet<i64>, rows: &[MigrationState]) -> (String, bool) {
     let mut applied = BTreeSet::new();
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
-        let Some((version, success)) = line.trim().split_once(':') else {
-            return ("unknown (unexpected migration data)".to_owned(), false);
-        };
-        if success != "true" && success != "t" {
-            return (format!("failed migration {version}"), false);
+    for row in rows {
+        if !row.success {
+            return (format!("failed migration {}", row.version), false);
         }
-        let Ok(version) = version.parse() else {
-            return ("unknown (unexpected migration data)".to_owned(), false);
-        };
-        applied.insert(version);
+        applied.insert(row.version);
     }
 
-    if applied == local {
+    if &applied == local {
         (format!("current ({} applied)", applied.len()), true)
-    } else if applied.is_subset(&local) {
+    } else if applied.is_subset(local) {
         (
             format!("{} pending", local.difference(&applied).count()),
             false,
@@ -1247,26 +1248,11 @@ fn latest_backup(paths: &Paths) -> (String, bool) {
     )
 }
 
-fn projection_job_status(paths: &Paths, profile: &ResolvedProfile) -> (String, bool) {
-    let Some(db_name) = profile.vars.get("db_name") else {
-        return ("unknown (database name missing)".to_owned(), false);
-    };
-    if !profile.services.contains_key(&ServiceName::Db) {
-        return ("not checked (external database)".to_owned(), false);
-    }
-    let command = format!(
-        "timeout --kill-after=1s 5s docker compose exec -T -e PGOPTIONS='-c statement_timeout=3000' postgres psql -X -v ON_ERROR_STOP=1 -U postgres -d {} -tAc {}",
-        shell_quote(db_name),
-        shell_quote(projection_status::QUERY)
-    );
-    match shell_command(&command, &paths.repo_root, &profile.env).output() {
-        Ok(output) if output.status.success() => {
-            match projection_status::QueueStatus::parse(&output.stdout) {
-                Ok(status) => (status.summary(), status.healthy()),
-                Err(_) => ("unknown (unexpected job data)".to_owned(), false),
-            }
-        }
-        _ => ("unknown (job query failed or timed out)".to_owned(), false),
+fn projection_job_status(profile: &ResolvedProfile) -> (String, bool) {
+    match profile_database_json::<projection_status::QueueStatus>(profile, projection_status::QUERY)
+    {
+        Ok(status) => (status.summary(), status.healthy()),
+        Err(error) => (error.message().to_owned(), false),
     }
 }
 
@@ -1279,7 +1265,7 @@ fn show_status(paths: &Paths, profile: &ResolvedProfile) -> OverallStatus {
         .collect::<Vec<_>>();
     let (migrations, migrations_healthy) = migration_status(paths, profile);
     let (latest_backup, backup_healthy) = latest_backup(paths);
-    let (projection_jobs, projections_healthy) = projection_job_status(paths, profile);
+    let (projection_jobs, projections_healthy) = projection_job_status(profile);
     let overall = classify_status(
         &reports,
         migrations_healthy && backup_healthy && projections_healthy,
@@ -1635,9 +1621,7 @@ fn run_checks(paths: &Paths, profile: &ResolvedProfile) -> bool {
     }
 
     let (migration_detail, migrations_healthy) = migration_status(paths, profile);
-    let migration_outcome = if migration_detail.starts_with("not checked") {
-        CheckOutcome::Skip
-    } else if migrations_healthy {
+    let migration_outcome = if migrations_healthy {
         CheckOutcome::Pass
     } else {
         CheckOutcome::Fail
@@ -3372,6 +3356,11 @@ fn rollback_profile(
 }
 
 fn run() -> Result<ExitCode> {
+    if env::args_os().nth(1).as_deref()
+        == Some(std::ffi::OsStr::new(database_status::WORKER_ARGUMENT))
+    {
+        return Ok(database_status::run_worker());
+    }
     let repo_root = repo_root()?;
     let registry = load_registry(&repo_root)?;
 
@@ -3650,6 +3639,46 @@ mod tests {
         }
         // Unknown queue health is supplied as false by the collector.
         assert_eq!(classify_status(&running, false), OverallStatus::Degraded);
+    }
+
+    #[test]
+    fn migration_classification_covers_current_pending_failed_and_diverged() {
+        let local = BTreeSet::from([1, 2]);
+        let rows = |versions: &[i64]| {
+            versions
+                .iter()
+                .map(|version| MigrationState {
+                    version: *version,
+                    success: true,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            classify_migrations(&local, &rows(&[1, 2])),
+            ("current (2 applied)".to_owned(), true)
+        );
+        assert_eq!(
+            classify_migrations(&local, &rows(&[1])),
+            ("1 pending".to_owned(), false)
+        );
+        assert_eq!(
+            classify_migrations(&local, &rows(&[])),
+            ("2 pending".to_owned(), false)
+        );
+        assert_eq!(
+            classify_migrations(&local, &rows(&[1, 2, 3])),
+            ("diverged from local migrations".to_owned(), false)
+        );
+        assert_eq!(
+            classify_migrations(
+                &local,
+                &[MigrationState {
+                    version: 1,
+                    success: false
+                }]
+            ),
+            ("failed migration 1".to_owned(), false)
+        );
     }
 
     #[test]
