@@ -1,13 +1,21 @@
-use std::{collections::BTreeMap, time::Duration};
+use std::{
+    collections::BTreeMap,
+    ffi::OsString,
+    io::{Read, Write},
+    path::Path,
+    process::{Command, Stdio},
+    time::{Duration, Instant},
+};
 
-use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sqlx::{ConnectOptions, Connection, PgConnection, postgres::PgConnectOptions};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 const QUERY_TIMEOUT: Duration = Duration::from_secs(3);
+pub const WORKER_ARGUMENT: &str = "--internal-database-status";
 
 // Never expose driver errors: connection URLs and server messages may contain secrets.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StatusError {
     MissingUrl,
     InvalidUrl,
@@ -16,6 +24,101 @@ pub enum StatusError {
     QueryFailed,
     QueryTimeout,
     RuntimeUnavailable,
+}
+
+pub fn profile_requires_worker(profile_env: &BTreeMap<String, String>) -> bool {
+    // SQLx reads PG* defaults and password-file locations from process environment.
+    // A URL-only override can use the parent; other overrides need isolation.
+    profile_env.keys().any(|key| {
+        key.starts_with("PG") || matches!(key.as_str(), "HOME" | "USERPROFILE" | "APPDATA")
+    })
+}
+
+pub fn read_profile_json<T: DeserializeOwned>(
+    executable: &Path,
+    inherited_env: BTreeMap<OsString, OsString>,
+    profile_env: &BTreeMap<String, String>,
+    query: &str,
+) -> Result<T, StatusError> {
+    // Keep stdin below PIPE_BUF so writing a fixed probe cannot block on startup.
+    if query.len() > 4096 {
+        return Err(StatusError::QueryFailed);
+    }
+    let mut environment = inherited_env;
+    environment.extend(
+        profile_env
+            .iter()
+            .map(|(key, value)| (key.into(), value.into())),
+    );
+    let mut child = Command::new(executable)
+        .arg(WORKER_ARGUMENT)
+        .env_clear()
+        .envs(environment)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| StatusError::RuntimeUnavailable)?;
+    // Only the fixed SQL query goes through stdin; credentials never enter argv.
+    if child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(query.as_bytes())
+        .is_err()
+    {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(StatusError::RuntimeUnavailable);
+    }
+    let stdout = child.stdout.take().unwrap();
+    let reader = std::thread::spawn(move || {
+        let mut output = Vec::new();
+        stdout
+            .take(1_048_576)
+            .read_to_end(&mut output)
+            .map(|_| output)
+    });
+    let deadline = Instant::now() + Duration::from_secs(6);
+    let completed = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status.success(),
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = reader.join();
+                return Err(StatusError::QueryTimeout);
+            }
+        }
+    };
+    let output = reader
+        .join()
+        .ok()
+        .and_then(Result::ok)
+        .ok_or(StatusError::RuntimeUnavailable)?;
+    if !completed {
+        return Err(StatusError::RuntimeUnavailable);
+    }
+    let result: Result<serde_json::Value, StatusError> =
+        serde_json::from_slice(&output).map_err(|_| StatusError::RuntimeUnavailable)?;
+    result.and_then(|value| serde_json::from_value(value).map_err(|_| StatusError::QueryFailed))
+}
+
+pub fn run_worker() -> std::process::ExitCode {
+    let result = (|| {
+        let mut query = String::new();
+        std::io::stdin()
+            .take(4096)
+            .read_to_string(&mut query)
+            .map_err(|_| StatusError::QueryFailed)?;
+        let url = database_url(&BTreeMap::new(), std::env::var("DATABASE_URL").ok())?;
+        read_json::<serde_json::Value>(&url, &query)
+    })();
+    match serde_json::to_writer(std::io::stdout(), &result) {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(_) => std::process::ExitCode::FAILURE,
+    }
 }
 
 impl StatusError {
@@ -95,6 +198,31 @@ async fn read_json_async(url: &str, query: &str) -> Result<serde_json::Value, St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn postgres_and_home_overrides_require_environment_isolation() {
+        for key in [
+            "PGPASSWORD",
+            "PGSSLMODE",
+            "PGSSLROOTCERT",
+            "PGSSLCERT",
+            "PGSSLKEY",
+            "PGOPTIONS",
+            "PGPASSFILE",
+            "HOME",
+            "USERPROFILE",
+            "APPDATA",
+        ] {
+            assert!(
+                profile_requires_worker(&BTreeMap::from([(key.to_owned(), String::new())])),
+                "{key}"
+            );
+        }
+        assert!(!profile_requires_worker(&BTreeMap::from([(
+            "DATABASE_URL".to_owned(),
+            "url".to_owned()
+        )])));
+    }
 
     #[test]
     fn database_url_matches_service_environment_precedence() {

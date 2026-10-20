@@ -1104,6 +1104,16 @@ fn profile_database_json<T: serde::de::DeserializeOwned>(
     profile: &ResolvedProfile,
     query: &str,
 ) -> Result<T, database_status::StatusError> {
+    if database_status::profile_requires_worker(&profile.env) {
+        let executable =
+            env::current_exe().map_err(|_| database_status::StatusError::RuntimeUnavailable)?;
+        return database_status::read_profile_json(
+            &executable,
+            env::vars_os().collect(),
+            &profile.env,
+            query,
+        );
+    }
     let url = database_status::database_url(&profile.env, env::var("DATABASE_URL").ok())?;
     database_status::read_json(&url, query)
 }
@@ -3354,6 +3364,11 @@ fn rollback_profile(
 }
 
 fn run() -> Result<ExitCode> {
+    if env::args_os().nth(1).as_deref()
+        == Some(std::ffi::OsStr::new(database_status::WORKER_ARGUMENT))
+    {
+        return Ok(database_status::run_worker());
+    }
     let repo_root = repo_root()?;
     let registry = load_registry(&repo_root)?;
 
