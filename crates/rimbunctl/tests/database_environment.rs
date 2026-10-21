@@ -85,8 +85,12 @@ fn worker_database_queries_cover_migrations_queue_and_read_only_failures() -> Re
     );
     let queue: projection_status::QueueStatus =
         serde_json::from_value(read(url.as_str(), projection_status::QUERY).unwrap())?;
-    assert!(queue.healthy());
-    assert!(queue.summary().contains("0 pending"));
+    assert!(queue.healthy(projection_status::HealthThresholds::default()));
+    assert!(
+        queue
+            .summary(projection_status::HealthThresholds::default())
+            .contains("0 pending")
+    );
     assert_eq!(
         read(
             url.as_str(),
@@ -116,8 +120,12 @@ fn worker_database_queries_cover_migrations_queue_and_read_only_failures() -> Re
     })?;
     let queue: projection_status::QueueStatus =
         serde_json::from_value(read(url.as_str(), projection_status::QUERY).unwrap())?;
-    assert!(!queue.healthy());
-    assert!(queue.summary().contains("1 pending"));
+    assert!(!queue.healthy(projection_status::HealthThresholds::default()));
+    assert!(
+        queue
+            .summary(projection_status::HealthThresholds::default())
+            .contains("1 pending")
+    );
     assert_eq!(
         read(
             url.as_str(),
