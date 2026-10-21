@@ -277,9 +277,37 @@ It now supports reusable `fragments` and concrete `profiles`.
 - `profiles` define runnable combinations via `extends`
 - `vars` provide reusable parameters such as ports, database names, and hostnames
 - `env` defines environment variables passed to all commands in the profile
+- `health` defines per-profile warning thresholds for projection queue status
 - `state_namespace` decides where `.rimbun/<namespace>/...` runtime state is stored
 
 If no custom file exists, `rimbunctl` provides a built-in `dev` profile assembled from internal fragments. You can add a repository-local `rimbunctl.toml` to define further fragments and profiles.
+
+Projection warning thresholds can be reused in fragments and overridden per profile:
+
+```toml
+[fragments.production-health.health]
+projection_max_age_seconds = 300
+projection_max_failed_attempts = 3
+
+[profiles.quran-prod]
+extends = ["server-single-host", "production-runtime", "project_quran", "production-health"]
+
+[profiles.quran-prod.health]
+projection_max_age_seconds = 600
+```
+
+For existing profiles, add the fragment to their `extends` list and keep the other
+profile settings. The project/environment fragments above are defined by this
+repository's configuration.
+Both settings must be positive integers; zero, negative values, fractions, and
+unknown keys inside `health` are rejected when the file is loaded. Omitted settings
+inherit independently. Later `extends` entries override earlier entries, then the
+profile overrides its parents; an empty `health` table does not erase inherited
+values. Defaults (applied only after inheritance) remain 300 seconds and 3 failed
+attempts. A job reaching either threshold makes the queue degraded. `status` shows
+the effective limits and uses them for both the queue marker and overall status.
+These settings only affect status warnings, not worker retry policies or database
+connection/query deadlines. Unknown database state still prevents a healthy status.
 
 Example configuration:
 
@@ -504,8 +532,8 @@ the oldest outstanding job, the maximum consecutive failed attempts, and the las
 for the job with the most failures (including its section ID). Pending includes
 running jobs; the other counts are subsets, not additional jobs.
 
-A running profile is `degraded` when a job has been outstanding for at least five
-minutes or a job has failed at least three times consecutively. A fresh queue,
+A running profile is `degraded` when a job reaches either configured `health`
+threshold (by default five minutes outstanding or three consecutive failures). A fresh queue,
 including active processing or one-off retries, does not degrade the profile.
 Queue age uses `queued_at`: new submission/moderation changes, worker claims,
 retries, and restarts do not reset it. Completing an outdated revision or work from

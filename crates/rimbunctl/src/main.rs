@@ -194,6 +194,8 @@ struct LayerConfig {
     services: BTreeMap<String, ServiceConfig>,
     database: Option<DatabaseConfig>,
     deployment: Option<DeploymentConfig>,
+    #[serde(default)]
+    health: HealthConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -209,6 +211,29 @@ struct ProfileConfig {
     services: BTreeMap<String, ServiceConfig>,
     database: Option<DatabaseConfig>,
     deployment: Option<DeploymentConfig>,
+    #[serde(default)]
+    health: HealthConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct HealthConfig {
+    projection_max_age_seconds: Option<std::num::NonZeroU64>,
+    projection_max_failed_attempts: Option<std::num::NonZeroU64>,
+}
+
+impl HealthConfig {
+    fn resolve(&self) -> projection_status::HealthThresholds {
+        let defaults = projection_status::HealthThresholds::default();
+        projection_status::HealthThresholds {
+            projection_max_age_seconds: self
+                .projection_max_age_seconds
+                .unwrap_or(defaults.projection_max_age_seconds),
+            projection_max_failed_attempts: self
+                .projection_max_failed_attempts
+                .unwrap_or(defaults.projection_max_failed_attempts),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -247,6 +272,7 @@ struct ResolvedProfile {
     services: BTreeMap<ServiceName, ResolvedServiceConfig>,
     database: Option<ResolvedDatabaseConfig>,
     deployment: Option<ResolvedDeploymentConfig>,
+    health: projection_status::HealthThresholds,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -645,6 +671,12 @@ fn merge_deployment(base: &mut DeploymentConfig, overlay: &DeploymentConfig) {
 }
 
 fn merge_layer(base: &mut LayerConfig, overlay: &LayerConfig) {
+    if let Some(age) = overlay.health.projection_max_age_seconds {
+        base.health.projection_max_age_seconds = Some(age);
+    }
+    if let Some(attempts) = overlay.health.projection_max_failed_attempts {
+        base.health.projection_max_failed_attempts = Some(attempts);
+    }
     if let Some(namespace) = &overlay.state_namespace {
         base.state_namespace = Some(namespace.clone());
     }
@@ -690,6 +722,7 @@ fn resolve_fragment(
             services: profile.services.clone(),
             database: profile.database.clone(),
             deployment: profile.deployment.clone(),
+            health: profile.health.clone(),
         }
     } else {
         bail!("unknown fragment/profile '{name}'");
@@ -757,6 +790,7 @@ fn resolve_profile(registry: &ConfigRegistry, profile_name: &str) -> Result<Reso
             services: profile.services.clone(),
             database: profile.database.clone(),
             deployment: profile.deployment.clone(),
+            health: profile.health.clone(),
         },
     );
 
@@ -899,6 +933,7 @@ fn resolve_profile(registry: &ConfigRegistry, profile_name: &str) -> Result<Reso
         services,
         database,
         deployment,
+        health: resolved_layer.health.resolve(),
     })
 }
 
@@ -1251,7 +1286,10 @@ fn latest_backup(paths: &Paths) -> (String, bool) {
 fn projection_job_status(profile: &ResolvedProfile) -> (String, bool) {
     match profile_database_json::<projection_status::QueueStatus>(profile, projection_status::QUERY)
     {
-        Ok(status) => (status.summary(), status.healthy()),
+        Ok(status) => (
+            status.summary(profile.health),
+            status.healthy(profile.health),
+        ),
         Err(error) => (error.message().to_owned(), false),
     }
 }
@@ -1296,6 +1334,10 @@ fn show_status(paths: &Paths, profile: &ResolvedProfile) -> OverallStatus {
     println!();
     println!("Migrations: {migrations}");
     println!("Projection jobs: {projection_jobs}");
+    println!(
+        "Projection limits: age >= {}s or failed attempts >= {} means degraded",
+        profile.health.projection_max_age_seconds, profile.health.projection_max_failed_attempts
+    );
     println!("Latest backup: {latest_backup}");
     println!("Overall: {}", overall.as_str());
 
@@ -3595,6 +3637,153 @@ mod tests {
     }
 
     #[test]
+    fn health_threshold_defaults_preserve_existing_behavior() {
+        let registry = builtin_registry();
+        let profile = resolve_profile(&registry, "dev").unwrap();
+        assert_eq!(
+            profile.health,
+            projection_status::HealthThresholds::default()
+        );
+        let config: FileConfig = toml::from_str("[profiles.empty.health]").unwrap();
+        let registry = ConfigRegistry {
+            fragments: config.fragments,
+            profiles: config.profiles,
+        };
+        assert_eq!(
+            resolve_profile(&registry, "empty").unwrap().health,
+            profile.health
+        );
+        assert_eq!(ResolvedProfile::default().health, profile.health);
+    }
+
+    #[test]
+    fn health_thresholds_merge_per_field_across_fragments_and_profiles() {
+        let config: FileConfig = toml::from_str(
+            r#"
+            [fragments.base.health]
+            projection_max_age_seconds = 600
+            projection_max_failed_attempts = 5
+            [fragments.environment]
+            extends = ["base"]
+            [fragments.environment.health]
+            projection_max_failed_attempts = 2
+            [fragments.later.health]
+            projection_max_age_seconds = 1200
+            [profiles.parent]
+            extends = ["environment"]
+            [profiles.parent.health]
+            projection_max_age_seconds = 900
+            [profiles.child]
+            extends = ["parent", "later"]
+            [profiles.child.health]
+            projection_max_failed_attempts = 4
+            [profiles.grandchild]
+            extends = ["child"]
+            [profiles.grandchild.health]
+            [profiles.sibling]
+            extends = ["environment"]
+            [profiles.partial.health]
+            projection_max_failed_attempts = 1
+        "#,
+        )
+        .unwrap();
+        let registry = ConfigRegistry {
+            fragments: config.fragments,
+            profiles: config.profiles,
+        };
+        for (name, age, attempts) in [
+            ("parent", 900, 2),
+            ("child", 1200, 4),
+            ("grandchild", 1200, 4),
+            ("sibling", 600, 2),
+            ("partial", 300, 1),
+        ] {
+            let health = resolve_profile(&registry, name).unwrap().health;
+            assert_eq!(health.projection_max_age_seconds.get(), age, "{name}");
+            assert_eq!(
+                health.projection_max_failed_attempts.get(),
+                attempts,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_health_thresholds_are_rejected_during_configuration_parsing() {
+        for scope in ["profiles.test", "fragments.test"] {
+            for field in [
+                "projection_max_age_seconds",
+                "projection_max_failed_attempts",
+            ] {
+                for value in ["0", "-1", "1.5", "true", "\"300\""] {
+                    let raw = format!("[{scope}.health]\n{field} = {value}");
+                    assert!(toml::from_str::<FileConfig>(&raw).is_err(), "{raw}");
+                }
+            }
+            assert!(
+                toml::from_str::<FileConfig>(&format!(
+                    "[{scope}.health]\nprojection_max_ages_seconds = 300"
+                ))
+                .is_err()
+            );
+        }
+        let paths = temporary_paths("invalid-health");
+        fs::write(
+            paths.repo_root.join("rimbunctl.toml"),
+            "[fragments.unused.health]\nprojection_max_age_seconds = 0",
+        )
+        .unwrap();
+        let result = load_registry(&paths.repo_root);
+        fs::remove_dir_all(paths.state_dir).unwrap();
+        assert!(
+            result.is_err(),
+            "invalid settings must fail loading even in unused fragments"
+        );
+    }
+
+    #[test]
+    fn resolved_profile_thresholds_control_queue_and_overall_status() {
+        let config: FileConfig = toml::from_str(
+            r#"
+            [profiles.relaxed.health]
+            projection_max_age_seconds = 600
+            projection_max_failed_attempts = 5
+            [profiles.strict.health]
+            projection_max_age_seconds = 60
+            projection_max_failed_attempts = 1
+        "#,
+        )
+        .unwrap();
+        let registry = ConfigRegistry {
+            fragments: config.fragments,
+            profiles: config.profiles,
+        };
+        let queue = projection_status::QueueStatus::parse(
+            br#"{
+            "pending": 1, "running": 0, "failed": 1, "expired_leases": 0,
+            "oldest_seconds": 300, "max_attempts": 3, "failure": null
+        }"#,
+        )
+        .unwrap();
+        for (name, expected) in [
+            ("relaxed", OverallStatus::Healthy),
+            ("strict", OverallStatus::Degraded),
+        ] {
+            let health = resolve_profile(&registry, name).unwrap().health;
+            let healthy = queue.healthy(health);
+            assert_eq!(
+                classify_status(&[status_report("running", "ready")], healthy),
+                expected
+            );
+            assert_eq!(queue.summary(health).contains("[degraded]"), !healthy);
+            assert_eq!(
+                classify_status(&[status_report("stopped", "not-ready")], healthy),
+                OverallStatus::Stopped
+            );
+        }
+    }
+
+    #[test]
     fn status_is_healthy_only_when_every_service_and_migrations_are_ready() {
         let reports = vec![
             status_report("running", "ready"),
@@ -3631,9 +3820,18 @@ mod tests {
             });
             let queue =
                 projection_status::QueueStatus::parse(&serde_json::to_vec(&data).unwrap()).unwrap();
-            assert_eq!(classify_status(&running, queue.healthy()), expected);
             assert_eq!(
-                classify_status(&stopped, queue.healthy()),
+                classify_status(
+                    &running,
+                    queue.healthy(projection_status::HealthThresholds::default())
+                ),
+                expected
+            );
+            assert_eq!(
+                classify_status(
+                    &stopped,
+                    queue.healthy(projection_status::HealthThresholds::default())
+                ),
                 OverallStatus::Stopped
             );
         }
