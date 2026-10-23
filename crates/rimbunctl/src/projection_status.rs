@@ -1,9 +1,9 @@
 #[cfg(test)]
 use anyhow::Result;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::num::NonZeroU64;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct HealthThresholds {
     pub projection_max_age_seconds: NonZeroU64,
     pub projection_max_failed_attempts: NonZeroU64,
@@ -34,7 +34,7 @@ select json_build_object(
 ) from projection_jobs
 "#;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct QueueStatus {
     pending: u64,
     running: u64,
@@ -45,14 +45,25 @@ pub struct QueueStatus {
     failure: Option<JobFailure>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct JobFailure {
     section_id: String,
     attempts: u64,
+    #[serde(skip_serializing)]
     message: String,
 }
 
 impl QueueStatus {
+    pub fn reason_codes(&self, thresholds: HealthThresholds) -> Vec<&'static str> {
+        let mut reasons = Vec::new();
+        if self.oldest_seconds >= thresholds.projection_max_age_seconds.get() {
+            reasons.push("projection_age_exceeded");
+        }
+        if self.max_attempts >= thresholds.projection_max_failed_attempts.get() {
+            reasons.push("projection_retry_limit_exceeded");
+        }
+        reasons
+    }
     #[cfg(test)]
     pub fn parse(raw: &[u8]) -> Result<Self> {
         Ok(serde_json::from_slice(raw)?)

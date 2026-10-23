@@ -222,6 +222,44 @@ minutes, which also covers backend recompilation in development.
 migration state, projection queue health, the latest backup, and an overall
 `healthy`, `degraded`, or `stopped` state.
 It exits successfully only when the profile is healthy, so it can also be used in scripts.
+
+For monitoring tools, request a structured report:
+
+```bash
+./rimbunctl quran-prod status --json > status.json
+```
+
+Both output formats use one collected report and the same classification. JSON
+stdout contains exactly one document with `schema_version: 1`, `observed_at` (UTC,
+after collection), `profile`, `state_dir`, `overall`, `exit_code`, `services`,
+`migrations`, `projection_jobs`, `latest_backup`, and `reasons`. Service entries
+include process/readiness state, endpoint, PID and log path. Migration records
+include version/success flags and pending versions. The projection report includes
+queue counters, oldest age, failed attempts, and effective thresholds. Backup
+fields include path, size, modification time and verification state.
+
+Each check has `state`, `healthy`, and fixed `reason_codes`. Top-level `reasons`
+identify the `component`, optional `service`, and `code`, e.g.
+`projection_age_exceeded`, `migrations_pending`, `database_connect_timeout`, or
+`backup_corrupt`. Unknown measurements are `null`, not zero or an empty queue.
+Missing backups remain permitted under the existing policy (`state: "missing"`,
+`healthy: true`); unreadable backup directories are unknown/unhealthy. Only an
+exact `verified` metadata status is accepted as verified.
+
+Exit code 0 means `overall: "healthy"`; `degraded` and `stopped` return 1, and the
+JSON `exit_code` matches. Valid `status --json` requests that cannot load their
+configuration/profile return one sanitized error document with `overall: "error"`,
+`exit_code: 1`, and `error.code: "status_setup_failed"`. Run without `--json` for
+configuration diagnostics. Invalid CLI syntax still uses Clap's stderr usage
+errors and exit code 2, without a JSON report.
+
+JSON does not export environment variables, connection URLs, raw driver errors,
+human diagnostic strings, or free-form queue errors (which could contain sensitive
+data). Failing-job section IDs and attempt counts remain available. The text view
+keeps its existing queue diagnostic line. Consumers should check `schema_version`
+and tolerate additional fields; breaking format changes require a version bump.
+Probes are sampled sequentially; separate invocations can naturally differ.
+
 Migration and projection-queue checks connect directly to `DATABASE_URL`, for both
 local and external PostgreSQL databases; no Docker, `psql`, or GNU `timeout` is
 needed for these checks. The profile's `env.DATABASE_URL` takes precedence over
