@@ -121,6 +121,18 @@ pub fn run_worker() -> std::process::ExitCode {
 }
 
 impl StatusError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::MissingUrl => "database_url_missing",
+            Self::InvalidUrl => "database_url_invalid",
+            Self::ConnectFailed => "database_connect_failed",
+            Self::ConnectTimeout => "database_connect_timeout",
+            Self::QueryFailed => "database_query_failed",
+            Self::QueryTimeout => "database_query_timeout",
+            Self::RuntimeUnavailable => "database_probe_unavailable",
+        }
+    }
+
     pub fn message(&self) -> &'static str {
         match self {
             Self::MissingUrl => "unknown (DATABASE_URL missing)",

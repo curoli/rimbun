@@ -45,7 +45,10 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum CommandKind {
     ListProfiles,
-    Status,
+    Status {
+        #[arg(long)]
+        json: bool,
+    },
     Check,
     Deploy {
         #[arg(long)]
@@ -123,7 +126,8 @@ enum CommandKind {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Serialize)]
+#[serde(rename_all = "snake_case")]
 enum ServiceName {
     Db,
     Embedding,
@@ -338,7 +342,8 @@ struct BackupVerification {
     verified_at: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 enum OverallStatus {
     Healthy,
     Degraded,
@@ -346,6 +351,9 @@ enum OverallStatus {
 }
 
 impl OverallStatus {
+    fn exit_code(self) -> u8 {
+        u8::from(self != Self::Healthy)
+    }
     fn as_str(self) -> &'static str {
         match self {
             Self::Healthy => "healthy",
@@ -355,7 +363,7 @@ impl OverallStatus {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 struct ServiceStatusReport {
     service: ServiceName,
     process: &'static str,
@@ -363,6 +371,75 @@ struct ServiceStatusReport {
     readiness: &'static str,
     endpoint: String,
     log_path: PathBuf,
+}
+
+#[derive(Debug, Serialize)]
+struct CheckStatusReport {
+    state: &'static str,
+    healthy: bool,
+    reason_codes: Vec<&'static str>,
+    #[serde(skip_serializing)]
+    detail: String,
+}
+
+impl CheckStatusReport {
+    fn unknown(code: &'static str, detail: String) -> Self {
+        Self {
+            state: "unknown",
+            healthy: false,
+            reason_codes: vec![code],
+            detail,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct MigrationStatusReport {
+    #[serde(flatten)]
+    check: CheckStatusReport,
+    local_versions: Option<Vec<i64>>,
+    applied: Option<Vec<MigrationState>>,
+    pending_versions: Option<Vec<i64>>,
+}
+
+#[derive(Debug, Serialize)]
+struct ProjectionStatusReport {
+    #[serde(flatten)]
+    check: CheckStatusReport,
+    thresholds: projection_status::HealthThresholds,
+    queue: Option<projection_status::QueueStatus>,
+}
+
+#[derive(Debug, Serialize)]
+struct BackupStatusReport {
+    #[serde(flatten)]
+    check: CheckStatusReport,
+    path: Option<PathBuf>,
+    size_bytes: Option<u64>,
+    modified_at: Option<chrono::DateTime<Utc>>,
+    verification: Option<&'static str>,
+}
+
+#[derive(Debug, Serialize)]
+struct StatusReason {
+    component: &'static str,
+    service: Option<ServiceName>,
+    code: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct StatusReport {
+    schema_version: u32,
+    profile: String,
+    state_dir: PathBuf,
+    observed_at: chrono::DateTime<Utc>,
+    overall: OverallStatus,
+    exit_code: u8,
+    services: Vec<ServiceStatusReport>,
+    migrations: MigrationStatusReport,
+    projection_jobs: ProjectionStatusReport,
+    latest_backup: BackupStatusReport,
+    reasons: Vec<StatusReason>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1118,19 +1195,37 @@ fn local_migration_versions(paths: &Paths) -> Result<BTreeSet<i64>> {
 }
 
 fn migration_status(paths: &Paths, profile: &ResolvedProfile) -> (String, bool) {
+    let report = collect_migration_status(paths, profile);
+    (report.check.detail, report.check.healthy)
+}
+
+fn collect_migration_status(paths: &Paths, profile: &ResolvedProfile) -> MigrationStatusReport {
     let Ok(local) = local_migration_versions(paths) else {
-        return ("unknown (cannot read local migrations)".to_owned(), false);
+        return MigrationStatusReport {
+            check: CheckStatusReport::unknown(
+                "local_migrations_unreadable",
+                "unknown (cannot read local migrations)".to_owned(),
+            ),
+            local_versions: None,
+            applied: None,
+            pending_versions: None,
+        };
     };
     match profile_database_json::<Vec<MigrationState>>(
         profile,
         database_status::MIGRATION_STATUS_QUERY,
     ) {
-        Ok(applied) => classify_migrations(&local, &applied),
-        Err(error) => (error.message().to_owned(), false),
+        Ok(applied) => migration_report(&local, applied),
+        Err(error) => MigrationStatusReport {
+            check: CheckStatusReport::unknown(error.code(), error.message().to_owned()),
+            local_versions: Some(local.into_iter().collect()),
+            applied: None,
+            pending_versions: None,
+        },
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 struct MigrationState {
     version: i64,
     success: bool,
@@ -1145,25 +1240,51 @@ fn profile_database_json<T: serde::de::DeserializeOwned>(
     database_status::read_profile_json(&executable, env::vars_os().collect(), &profile.env, query)
 }
 
-fn classify_migrations(local: &BTreeSet<i64>, rows: &[MigrationState]) -> (String, bool) {
-    let mut applied = BTreeSet::new();
-    for row in rows {
-        if !row.success {
-            return (format!("failed migration {}", row.version), false);
-        }
-        applied.insert(row.version);
-    }
-
-    if &applied == local {
-        (format!("current ({} applied)", applied.len()), true)
+fn migration_report(local: &BTreeSet<i64>, rows: Vec<MigrationState>) -> MigrationStatusReport {
+    let applied: BTreeSet<i64> = rows.iter().map(|row| row.version).collect();
+    let pending: Vec<i64> = local.difference(&applied).copied().collect();
+    let (healthy, code, detail) = if let Some(failed) = rows.iter().find(|row| !row.success) {
+        (
+            false,
+            "migration_failed",
+            format!("failed migration {}", failed.version),
+        )
+    } else if &applied == local {
+        (
+            true,
+            "migrations_current",
+            format!("current ({} applied)", applied.len()),
+        )
     } else if applied.is_subset(local) {
         (
-            format!("{} pending", local.difference(&applied).count()),
             false,
+            "migrations_pending",
+            format!("{} pending", pending.len()),
         )
     } else {
-        ("diverged from local migrations".to_owned(), false)
+        (
+            false,
+            "migrations_diverged",
+            "diverged from local migrations".to_owned(),
+        )
+    };
+    MigrationStatusReport {
+        check: CheckStatusReport {
+            state: if healthy { "healthy" } else { "degraded" },
+            healthy,
+            reason_codes: if healthy { vec![] } else { vec![code] },
+            detail,
+        },
+        local_versions: Some(local.iter().copied().collect()),
+        applied: Some(rows),
+        pending_versions: Some(pending),
     }
+}
+
+#[cfg(test)]
+fn classify_migrations(local: &BTreeSet<i64>, rows: &[MigrationState]) -> (String, bool) {
+    let report = migration_report(local, rows.to_vec());
+    (report.check.detail, report.check.healthy)
 }
 
 fn format_bytes(bytes: u64) -> String {
@@ -1223,125 +1344,304 @@ fn write_backup_metadata(backup_path: &Path, metadata: &BackupMetadata) -> Resul
     Ok(())
 }
 
-fn backup_verification_label(backup_path: &Path) -> String {
-    let metadata = match read_backup_metadata(backup_path) {
-        Ok(Some(metadata)) => metadata,
-        Ok(None) => return "unverified (no metadata)".to_owned(),
-        Err(_) => return "invalid metadata".to_owned(),
-    };
-    let checksum = match sha256_file(backup_path) {
-        Ok(checksum) => checksum,
-        Err(_) => return "unreadable".to_owned(),
-    };
-    if checksum != metadata.sha256 {
-        return "CORRUPT (checksum mismatch)".to_owned();
-    }
-    if metadata.verification.status == "verified" {
-        metadata
-            .verification
-            .verified_at
-            .map(|value| format!("verified {value}"))
-            .unwrap_or_else(|| "verified".to_owned())
-    } else {
-        metadata.verification.status
-    }
-}
-
-fn latest_backup(paths: &Paths) -> (String, bool) {
-    let Ok(entries) = fs::read_dir(&paths.backup_dir) else {
-        return ("none".to_owned(), true);
-    };
-    let latest = entries
-        .filter_map(Result::ok)
-        .filter_map(|entry| {
-            if entry.path().extension().and_then(|value| value.to_str()) != Some("sql") {
-                return None;
-            }
-            let metadata = entry.metadata().ok()?;
-            if !metadata.is_file() {
-                return None;
-            }
-            Some((metadata.modified().ok()?, entry, metadata.len()))
-        })
-        .max_by_key(|(modified, _, _)| *modified);
-
-    let Some((modified, entry, size)) = latest else {
-        return ("none".to_owned(), true);
-    };
-    let modified = chrono::DateTime::<Utc>::from(modified)
-        .format("%Y-%m-%d %H:%M:%S UTC")
-        .to_string();
-    let verification = backup_verification_label(&entry.path());
-    let healthy = verification.starts_with("verified");
-    (
-        format!(
-            "{} ({}, {modified}, {verification})",
-            entry.file_name().to_string_lossy(),
-            format_bytes(size),
+fn backup_verification(backup_path: &Path) -> (CheckStatusReport, &'static str) {
+    let result = match read_backup_metadata(backup_path) {
+        Ok(Some(metadata)) => match sha256_file(backup_path) {
+            Err(_) => (
+                "unreadable",
+                "backup_unreadable",
+                "unreadable".to_owned(),
+                false,
+            ),
+            Ok(checksum) if checksum != metadata.sha256 => (
+                "corrupt",
+                "backup_corrupt",
+                "CORRUPT (checksum mismatch)".to_owned(),
+                false,
+            ),
+            Ok(_) if metadata.verification.status == "verified" => (
+                "verified",
+                "",
+                metadata
+                    .verification
+                    .verified_at
+                    .map(|value| format!("verified {value}"))
+                    .unwrap_or_else(|| "verified".to_owned()),
+                true,
+            ),
+            Ok(_) => (
+                "verification_failed",
+                "backup_verification_failed",
+                metadata.verification.status,
+                false,
+            ),
+        },
+        Ok(None) => (
+            "unverified",
+            "backup_unverified",
+            "unverified (no metadata)".to_owned(),
+            false,
         ),
-        healthy,
+        Err(_) => (
+            "invalid_metadata",
+            "backup_metadata_invalid",
+            "invalid metadata".to_owned(),
+            false,
+        ),
+    };
+    (
+        CheckStatusReport {
+            state: if result.3 { "healthy" } else { "degraded" },
+            healthy: result.3,
+            reason_codes: if result.3 { vec![] } else { vec![result.1] },
+            detail: result.2,
+        },
+        result.0,
     )
 }
 
-fn projection_job_status(profile: &ResolvedProfile) -> (String, bool) {
-    match profile_database_json::<projection_status::QueueStatus>(profile, projection_status::QUERY)
-    {
-        Ok(status) => (
-            status.summary(profile.health),
-            status.healthy(profile.health),
-        ),
-        Err(error) => (error.message().to_owned(), false),
+#[cfg(test)]
+fn backup_verification_label(backup_path: &Path) -> String {
+    backup_verification(backup_path).0.detail
+}
+
+fn latest_backup(paths: &Paths) -> (String, bool) {
+    let report = collect_latest_backup(paths);
+    (report.check.detail, report.check.healthy)
+}
+
+fn empty_backup_report(check: CheckStatusReport) -> BackupStatusReport {
+    BackupStatusReport {
+        check,
+        path: None,
+        size_bytes: None,
+        modified_at: None,
+        verification: None,
     }
 }
 
-fn show_status(paths: &Paths, profile: &ResolvedProfile) -> OverallStatus {
-    let reports = SERVICE_ORDER
+fn collect_latest_backup(paths: &Paths) -> BackupStatusReport {
+    let missing = || {
+        empty_backup_report(CheckStatusReport {
+            state: "missing",
+            healthy: true,
+            reason_codes: vec!["backup_missing"],
+            detail: "none".to_owned(),
+        })
+    };
+    let unknown = || {
+        empty_backup_report(CheckStatusReport::unknown(
+            "backup_inspection_failed",
+            "unknown (cannot inspect backups)".to_owned(),
+        ))
+    };
+    let entries = match fs::read_dir(&paths.backup_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == ErrorKind::NotFound => return missing(),
+        Err(_) => return unknown(),
+    };
+    let mut latest = None;
+    for entry in entries {
+        let Ok(entry) = entry else {
+            return unknown();
+        };
+        if entry.path().extension().and_then(|value| value.to_str()) != Some("sql") {
+            continue;
+        }
+        let Ok(metadata) = entry.metadata() else {
+            return unknown();
+        };
+        if !metadata.is_file() {
+            continue;
+        }
+        let Ok(modified) = metadata.modified() else {
+            return unknown();
+        };
+        if latest.as_ref().is_none_or(|(time, _, _)| modified > *time) {
+            latest = Some((modified, entry, metadata.len()));
+        }
+    }
+    let Some((modified, entry, size)) = latest else {
+        return missing();
+    };
+    let modified_at = chrono::DateTime::<Utc>::from(modified);
+    let (mut check, verification) = backup_verification(&entry.path());
+    check.detail = format!(
+        "{} ({}, {}, {})",
+        entry.file_name().to_string_lossy(),
+        format_bytes(size),
+        modified_at.format("%Y-%m-%d %H:%M:%S UTC"),
+        check.detail
+    );
+    BackupStatusReport {
+        check,
+        path: Some(entry.path()),
+        size_bytes: Some(size),
+        modified_at: Some(modified_at),
+        verification: Some(verification),
+    }
+}
+
+fn collect_projection_status(profile: &ResolvedProfile) -> ProjectionStatusReport {
+    projection_report(
+        profile.health,
+        profile_database_json(profile, projection_status::QUERY),
+    )
+}
+
+fn projection_report(
+    thresholds: projection_status::HealthThresholds,
+    result: Result<projection_status::QueueStatus, database_status::StatusError>,
+) -> ProjectionStatusReport {
+    match result {
+        Ok(queue) => {
+            let healthy = queue.healthy(thresholds);
+            ProjectionStatusReport {
+                check: CheckStatusReport {
+                    state: if healthy { "healthy" } else { "degraded" },
+                    healthy,
+                    reason_codes: queue.reason_codes(thresholds),
+                    detail: queue.summary(thresholds),
+                },
+                thresholds,
+                queue: Some(queue),
+            }
+        }
+        Err(error) => ProjectionStatusReport {
+            check: CheckStatusReport::unknown(error.code(), error.message().to_owned()),
+            thresholds,
+            queue: None,
+        },
+    }
+}
+
+fn assemble_status_report(
+    profile: &ResolvedProfile,
+    paths: &Paths,
+    services: Vec<ServiceStatusReport>,
+    migrations: MigrationStatusReport,
+    projection_jobs: ProjectionStatusReport,
+    latest_backup: BackupStatusReport,
+) -> StatusReport {
+    let overall = classify_status(
+        &services,
+        migrations.check.healthy && projection_jobs.check.healthy && latest_backup.check.healthy,
+    );
+    let mut reasons = Vec::new();
+    for service in &services {
+        for (code, applies) in [
+            ("service_process_not_running", service.process != "running"),
+            ("service_not_ready", service.readiness != "ready"),
+        ] {
+            if applies {
+                reasons.push(StatusReason {
+                    component: "service",
+                    service: Some(service.service),
+                    code,
+                });
+            }
+        }
+    }
+    for (component, check) in [
+        ("migrations", &migrations.check),
+        ("projection_jobs", &projection_jobs.check),
+        ("latest_backup", &latest_backup.check),
+    ] {
+        if !check.healthy {
+            reasons.extend(check.reason_codes.iter().map(|code| StatusReason {
+                component,
+                service: None,
+                code,
+            }));
+        }
+    }
+    StatusReport {
+        schema_version: 1,
+        profile: profile.profile_name.clone(),
+        state_dir: paths.state_dir.clone(),
+        observed_at: Utc::now(),
+        overall,
+        exit_code: overall.exit_code(),
+        services,
+        migrations,
+        projection_jobs,
+        latest_backup,
+        reasons,
+    }
+}
+
+fn collect_status(paths: &Paths, profile: &ResolvedProfile) -> StatusReport {
+    let services = SERVICE_ORDER
         .iter()
         .copied()
         .filter(|service| profile.services.contains_key(service))
         .map(|service| collect_service_status(paths, profile, service))
-        .collect::<Vec<_>>();
-    let (migrations, migrations_healthy) = migration_status(paths, profile);
-    let (latest_backup, backup_healthy) = latest_backup(paths);
-    let (projection_jobs, projections_healthy) = projection_job_status(profile);
-    let overall = classify_status(
-        &reports,
-        migrations_healthy && backup_healthy && projections_healthy,
-    );
+        .collect();
+    let migrations = collect_migration_status(paths, profile);
+    let latest_backup = collect_latest_backup(paths);
+    let projection_jobs = collect_projection_status(profile);
+    assemble_status_report(
+        profile,
+        paths,
+        services,
+        migrations,
+        projection_jobs,
+        latest_backup,
+    )
+}
 
-    println!("Profile: {}", profile.profile_name);
-    println!("State:   {}", paths.state_dir.display());
-    println!();
-    println!(
+fn write_status(output: &mut impl Write, report: &StatusReport, json: bool) -> Result<()> {
+    if json {
+        let encoded = serde_json::to_vec_pretty(report)?;
+        output.write_all(&encoded)?;
+        writeln!(output)?;
+        return Ok(());
+    }
+    writeln!(output, "Profile: {}", report.profile)?;
+    writeln!(output, "State:   {}\n", report.state_dir.display())?;
+    writeln!(
+        output,
         "{:<10} {:<9} {:<10} {:<8} Endpoint",
         "Service", "Process", "Readiness", "PID"
-    );
-    for report in &reports {
-        let pid = report
+    )?;
+    for service in &report.services {
+        let pid = service
             .pid
             .map(|value| value.to_string())
             .unwrap_or_else(|| "-".to_owned());
-        println!(
+        writeln!(
+            output,
             "{:<10} {:<9} {:<10} {:<8} {}",
-            report.service.as_str(),
-            report.process,
-            report.readiness,
+            service.service.as_str(),
+            service.process,
+            service.readiness,
             pid,
-            report.endpoint
-        );
-        println!("           log: {}", report.log_path.display());
+            service.endpoint
+        )?;
+        writeln!(output, "           log: {}", service.log_path.display())?;
     }
-    println!();
-    println!("Migrations: {migrations}");
-    println!("Projection jobs: {projection_jobs}");
-    println!(
+    writeln!(output, "\nMigrations: {}", report.migrations.check.detail)?;
+    writeln!(
+        output,
+        "Projection jobs: {}",
+        report.projection_jobs.check.detail
+    )?;
+    writeln!(
+        output,
         "Projection limits: age >= {}s or failed attempts >= {} means degraded",
-        profile.health.projection_max_age_seconds, profile.health.projection_max_failed_attempts
-    );
-    println!("Latest backup: {latest_backup}");
-    println!("Overall: {}", overall.as_str());
-
-    overall
+        report.projection_jobs.thresholds.projection_max_age_seconds,
+        report
+            .projection_jobs
+            .thresholds
+            .projection_max_failed_attempts
+    )?;
+    writeln!(
+        output,
+        "Latest backup: {}",
+        report.latest_backup.check.detail
+    )?;
+    writeln!(output, "Overall: {}", report.overall.as_str())?;
+    Ok(())
 }
 
 fn check_result(
@@ -3426,13 +3726,10 @@ fn run() -> Result<ExitCode> {
             list_profiles(&registry);
             return Ok(ExitCode::SUCCESS);
         }
-        CommandKind::Status => {
-            let status = show_status(&paths, &profile);
-            return Ok(if status == OverallStatus::Healthy {
-                ExitCode::SUCCESS
-            } else {
-                ExitCode::from(1)
-            });
+        CommandKind::Status { json } => {
+            let report = collect_status(&paths, &profile);
+            write_status(&mut std::io::stdout().lock(), &report, json)?;
+            return Ok(ExitCode::from(report.exit_code));
         }
         CommandKind::Check => {
             return Ok(if run_checks(&paths, &profile) {
@@ -3545,6 +3842,17 @@ fn main() -> ExitCode {
     match run() {
         Ok(code) => code,
         Err(error) => {
+            if Cli::try_parse()
+                .is_ok_and(|cli| matches!(cli.command, CommandKind::Status { json: true }))
+            {
+                let failure = serde_json::json!({
+                    "schema_version": 1, "overall": "error", "exit_code": 1,
+                    "error": { "code": "status_setup_failed" }
+                });
+                let _ = writeln!(std::io::stdout().lock(), "{failure}");
+                eprintln!("Status setup failed; run without --json for diagnostic details.");
+                return ExitCode::from(1);
+            }
             eprintln!("\n=== rimbunctl failed ===");
             eprintln!("{error:#}");
             ExitCode::from(1)
@@ -3885,7 +4193,164 @@ mod tests {
             Cli::try_parse_from(["rimbunctl", "dev", "status"]).expect("parse status command");
 
         assert_eq!(cli.profile.as_deref(), Some("dev"));
-        assert!(matches!(cli.command, CommandKind::Status));
+        assert!(matches!(cli.command, CommandKind::Status { json: false }));
+        let cli = Cli::try_parse_from(["rimbunctl", "dev", "status", "--json"]).unwrap();
+        assert!(matches!(cli.command, CommandKind::Status { json: true }));
+    }
+
+    fn status_fixture(
+        paths: &Paths,
+        process: &'static str,
+        readiness: &'static str,
+        age: u64,
+        attempts: u64,
+    ) -> StatusReport {
+        let profile = ResolvedProfile {
+            profile_name: "status-test".to_owned(),
+            ..ResolvedProfile::default()
+        };
+        let queue = projection_status::QueueStatus::parse(&serde_json::to_vec(&serde_json::json!({
+            "pending": 1, "running": 0, "failed": attempts.min(1), "expired_leases": 0,
+            "oldest_seconds": age, "max_attempts": attempts,
+            "failure": {"section_id": "test-section", "attempts": attempts, "message": "postgres://user:secret-must-not-leak@host/db"}
+        })).unwrap()).unwrap();
+        assemble_status_report(
+            &profile,
+            paths,
+            vec![status_report(process, readiness)],
+            migration_report(
+                &BTreeSet::from([1]),
+                vec![MigrationState {
+                    version: 1,
+                    success: true,
+                }],
+            ),
+            projection_report(profile.health, Ok(queue)),
+            collect_latest_backup(paths),
+        )
+    }
+
+    #[test]
+    fn json_text_and_exit_code_share_the_same_status_report() {
+        let paths = temporary_paths("status-output");
+        for (process, readiness, age, attempts, state, exit_code) in [
+            ("running", "ready", 0, 0, "healthy", 0),
+            ("running", "ready", 300, 3, "degraded", 1),
+            ("stopped", "not-ready", 300, 3, "stopped", 1),
+        ] {
+            let report = status_fixture(&paths, process, readiness, age, attempts);
+            let mut encoded = Vec::new();
+            write_status(&mut encoded, &report, true).unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
+            assert_eq!(json["schema_version"], 1);
+            assert_eq!(json["profile"], "status-test");
+            assert_eq!(json["overall"], state);
+            assert_eq!(json["exit_code"], exit_code);
+            assert_eq!(report.exit_code, report.overall.exit_code());
+            assert_eq!(json["services"][0]["service"], "backend");
+            assert_eq!(json["services"][0]["process"], process);
+            assert_eq!(json["migrations"]["applied"][0]["version"], 1);
+            assert_eq!(json["projection_jobs"]["queue"]["oldest_seconds"], age);
+            assert_eq!(
+                json["projection_jobs"]["thresholds"]["projection_max_age_seconds"],
+                300
+            );
+            assert_eq!(json["latest_backup"]["state"], "missing");
+            let mut text = Vec::new();
+            write_status(&mut text, &report, false).unwrap();
+            assert!(
+                String::from_utf8(text)
+                    .unwrap()
+                    .contains(&format!("Overall: {state}"))
+            );
+            let raw = String::from_utf8(encoded).unwrap();
+            assert!(!raw.contains("secret-must-not-leak"));
+            assert!(!raw.contains("\"detail\""));
+            assert!(!raw.contains("\"message\""));
+        }
+        fs::remove_dir_all(paths.state_dir).unwrap();
+    }
+
+    #[test]
+    fn json_report_preserves_unknown_and_fixed_failure_codes() {
+        let paths = temporary_paths("status-unknown");
+        let report = status_fixture(&paths, "running", "ready", 0, 0);
+        let profile = ResolvedProfile::default();
+        let projection = projection_report(
+            profile.health,
+            Err(database_status::StatusError::ConnectTimeout),
+        );
+        let report = assemble_status_report(
+            &profile,
+            &paths,
+            report.services,
+            report.migrations,
+            projection,
+            report.latest_backup,
+        );
+        let json = serde_json::to_value(&report).unwrap();
+        assert_eq!(json["overall"], "degraded");
+        assert_eq!(json["projection_jobs"]["state"], "unknown");
+        assert!(json["projection_jobs"]["queue"].is_null());
+        assert_eq!(
+            json["projection_jobs"]["reason_codes"][0],
+            "database_connect_timeout"
+        );
+        assert_eq!(json["reasons"][0]["component"], "projection_jobs");
+        assert_eq!(json["reasons"][0]["code"], "database_connect_timeout");
+        let pending = migration_report(
+            &BTreeSet::from([1, 2]),
+            vec![MigrationState {
+                version: 1,
+                success: true,
+            }],
+        );
+        let pending = serde_json::to_value(pending).unwrap();
+        assert_eq!(pending["pending_versions"], serde_json::json!([2]));
+        assert_eq!(pending["reason_codes"][0], "migrations_pending");
+        fs::remove_dir_all(paths.state_dir).unwrap();
+    }
+
+    #[test]
+    fn structured_backup_status_distinguishes_verification_corruption_and_io_errors() {
+        let paths = temporary_paths("status-backup");
+        let path = paths.backup_dir.join("backup.sql");
+        fs::write(&path, b"backup").unwrap();
+        let unverified = collect_latest_backup(&paths);
+        assert!(!unverified.check.healthy);
+        assert_eq!(unverified.verification, Some("unverified"));
+        assert_eq!(unverified.size_bytes, Some(6));
+        let mut metadata = BackupMetadata {
+            format_version: 1,
+            profile: "test".to_owned(),
+            database: "test".to_owned(),
+            created_at: Utc::now().to_rfc3339(),
+            size_bytes: 6,
+            sha256: sha256_file(&path).unwrap(),
+            verification: BackupVerification {
+                status: "verified".to_owned(),
+                verified_at: Some(Utc::now().to_rfc3339()),
+            },
+        };
+        write_backup_metadata(&path, &metadata).unwrap();
+        let verified = collect_latest_backup(&paths);
+        assert!(verified.check.healthy);
+        assert_eq!(verified.verification, Some("verified"));
+        metadata.verification.status = "verified-but-not-valid-secret".to_owned();
+        write_backup_metadata(&path, &metadata).unwrap();
+        let invalid = collect_latest_backup(&paths);
+        assert!(!invalid.check.healthy);
+        assert!(!serde_json::to_string(&invalid).unwrap().contains("secret"));
+        fs::write(&path, b"changed backup").unwrap();
+        let corrupt = collect_latest_backup(&paths);
+        assert_eq!(corrupt.verification, Some("corrupt"));
+        assert_eq!(corrupt.check.reason_codes, vec!["backup_corrupt"]);
+        fs::remove_dir_all(&paths.backup_dir).unwrap();
+        fs::write(&paths.backup_dir, b"not a directory").unwrap();
+        let unknown = collect_latest_backup(&paths);
+        assert!(!unknown.check.healthy);
+        assert_eq!(unknown.check.state, "unknown");
+        fs::remove_dir_all(paths.state_dir).unwrap();
     }
 
     #[test]
