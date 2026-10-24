@@ -260,6 +260,105 @@ keeps its existing queue diagnostic line. Consumers should check `schema_version
 and tolerate additional fields; breaking format changes require a version bump.
 Probes are sampled sequentially; separate invocations can naturally differ.
 
+### Webhook Monitoring
+
+`monitor --once` collects the same health report and sends notifications when the
+overall state or set of problem codes changes. Configure the **name** of an
+environment variable, not the secret webhook URL, in `rimbunctl.toml`:
+
+```toml
+[profiles.quran-prod.monitor]
+webhook_url_env = "RIMBUN_MONITOR_WEBHOOK_URL"
+```
+
+The `monitor` table also works in reusable fragments and follows normal profile
+inheritance. Supply the URL through the invoking environment or a protected,
+untracked environment file. Profile environment values take precedence over
+inherited values, including empty values (which are rejected, not ignored).
+
+```bash
+export RIMBUN_MONITOR_WEBHOOK_URL='https://your-receiver.example/rimbun'
+./rimbunctl quran-prod monitor --once
+```
+
+The first healthy observation establishes a silent baseline. An unhealthy first
+observation, a changed problem, or a stopped profile generates a `problem` event;
+returning to healthy generates `recovery`. Unchanged problems are not repeated.
+Timestamps, PIDs, queue counters and reason ordering do not trigger new events.
+Notifications contain `schema_version: 1`, `event_id`, `kind`, and `previous` and
+`current` observations with profile, UTC observation time, overall health, and
+fixed component/service/problem codes. They exclude URLs, environment values,
+filesystem paths, and free-form diagnostics. The receiver must accept this JSON
+format; chat services may need an adapter.
+
+Each profile has a locked, atomically saved state file under
+`.rimbun/<state_namespace>/monitor/<profile-name-sha256>/state.json` (new directories
+are mode 0700 and files 0600). The command prints the exact path. Initialization
+synchronizes the state directory and its entire parent chain, including
+directories already created by another command or a failed initialization. Any
+directory synchronization failure aborts monitoring before HTTP delivery. The
+filesystem must support directory synchronization and ancestors must be readable.
+Events are saved **before** delivery; at most one queued event is attempted per
+invocation, oldest first. Failed deliveries remain queued even if the profile has
+already recovered; later invocations retry them before delivering recovery. Health
+and delivery state are reported separately. Exit code 0 requires healthy services and an empty queue;
+unhealthy services, outstanding delivery, or monitor errors return 1.
+
+Only HTTP 2xx acknowledges an event. Requests use a two-second connection timeout
+and five-second request timeout, without redirects or environment proxies. Prefer
+HTTPS. Delivery is **at least once**: a crash after HTTP success but before saving
+the acknowledgement can resend the same event. Receivers should deduplicate using
+`event_id` or the matching `Idempotency-Key` header. The webhook URL is never saved
+in monitor state or included in delivery errors.
+
+Concurrent runs for the same profile are rejected. Invalid, unsupported or
+wrong-profile state is not silently reset. State is limited to 4 MiB; reaching the
+limit stops observation/delivery without discarding the existing outbox and
+requires operator intervention. Preserve pending events rather than deleting state
+to clear an error. Monitoring must be invoked regularly to retry deliveries; it
+does not install a scheduler or start services.
+
+For example, after building with `cargo build --release -p rimbunctl`, a user
+systemd service can run it from a checkout (adjust paths and profile):
+
+```ini
+# ~/.config/systemd/user/rimbun-monitor-quran.service
+[Unit]
+Description=Check Rimbun Quran profile and deliver alerts
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/git/rimbun
+EnvironmentFile=%h/.config/rimbun/monitor.env
+ExecStart=%h/git/rimbun/target/release/rimbunctl quran-prod monitor --once
+TimeoutStartSec=120
+```
+
+```ini
+# ~/.config/systemd/user/rimbun-monitor-quran.timer
+[Unit]
+Description=Check Rimbun every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+
+[Install]
+WantedBy=timers.target
+```
+
+Keep `monitor.env` mode 0600, containing `RIMBUN_MONITOR_WEBHOOK_URL=...` and any
+required database environment. Enable deliberately with
+`systemctl --user daemon-reload` and
+`systemctl --user enable --now rimbun-monitor-quran.timer`; inspect output with
+`journalctl --user -u rimbun-monitor-quran.service`. A degraded check intentionally
+marks the oneshot service failed, but the timer continues running it. User timers
+need a running user manager; unattended servers may need an administrator-managed
+system unit or lingering. The service deadline also bounds the overall command,
+including local filesystem and process checks beyond individual probe deadlines.
+
+### Database and Deployment Checks
+
 Migration and projection-queue checks connect directly to `DATABASE_URL`, for both
 local and external PostgreSQL databases; no Docker, `psql`, or GNU `timeout` is
 needed for these checks. The profile's `env.DATABASE_URL` takes precedence over
