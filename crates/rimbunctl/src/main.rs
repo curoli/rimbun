@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 mod database_status;
+mod monitor;
 mod projection_status;
 
 const SERVICE_ORDER: [ServiceName; 4] = [
@@ -48,6 +49,10 @@ enum CommandKind {
     Status {
         #[arg(long)]
         json: bool,
+    },
+    Monitor {
+        #[arg(long, required = true)]
+        once: bool,
     },
     Check,
     Deploy {
@@ -200,6 +205,8 @@ struct LayerConfig {
     deployment: Option<DeploymentConfig>,
     #[serde(default)]
     health: HealthConfig,
+    #[serde(default)]
+    monitor: monitor::Config,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -217,6 +224,8 @@ struct ProfileConfig {
     deployment: Option<DeploymentConfig>,
     #[serde(default)]
     health: HealthConfig,
+    #[serde(default)]
+    monitor: monitor::Config,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -277,6 +286,7 @@ struct ResolvedProfile {
     database: Option<ResolvedDatabaseConfig>,
     deployment: Option<ResolvedDeploymentConfig>,
     health: projection_status::HealthThresholds,
+    monitor: monitor::Config,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -748,6 +758,7 @@ fn merge_deployment(base: &mut DeploymentConfig, overlay: &DeploymentConfig) {
 }
 
 fn merge_layer(base: &mut LayerConfig, overlay: &LayerConfig) {
+    base.monitor.merge(&overlay.monitor);
     if let Some(age) = overlay.health.projection_max_age_seconds {
         base.health.projection_max_age_seconds = Some(age);
     }
@@ -800,6 +811,7 @@ fn resolve_fragment(
             database: profile.database.clone(),
             deployment: profile.deployment.clone(),
             health: profile.health.clone(),
+            monitor: profile.monitor.clone(),
         }
     } else {
         bail!("unknown fragment/profile '{name}'");
@@ -868,6 +880,7 @@ fn resolve_profile(registry: &ConfigRegistry, profile_name: &str) -> Result<Reso
             database: profile.database.clone(),
             deployment: profile.deployment.clone(),
             health: profile.health.clone(),
+            monitor: profile.monitor.clone(),
         },
     );
 
@@ -1011,6 +1024,7 @@ fn resolve_profile(registry: &ConfigRegistry, profile_name: &str) -> Result<Reso
         database,
         deployment,
         health: resolved_layer.health.resolve(),
+        monitor: resolved_layer.monitor,
     })
 }
 
@@ -1588,6 +1602,57 @@ fn collect_status(paths: &Paths, profile: &ResolvedProfile) -> StatusReport {
         projection_jobs,
         latest_backup,
     )
+}
+
+fn monitor_observation(report: &StatusReport) -> monitor::Observation {
+    monitor::Observation {
+        profile: report.profile.clone(),
+        observed_at: report.observed_at,
+        overall: match report.overall {
+            OverallStatus::Healthy => monitor::Health::Healthy,
+            OverallStatus::Degraded => monitor::Health::Degraded,
+            OverallStatus::Stopped => monitor::Health::Stopped,
+        },
+        problems: report
+            .reasons
+            .iter()
+            .map(|reason| monitor::Problem {
+                component: reason.component.to_owned(),
+                service: reason.service.map(|service| service.as_str().to_owned()),
+                code: reason.code.to_owned(),
+            })
+            .collect(),
+    }
+}
+
+fn monitor_once(paths: &Paths, profile: &ResolvedProfile) -> Result<ExitCode> {
+    let url = profile
+        .monitor
+        .webhook_value(&profile.env, |name| env::var(name).ok())?;
+    let webhook = monitor::Webhook::new(&url)?;
+    // Hold the per-profile lock across collection, observation persistence and delivery.
+    let mut monitor = monitor::Monitor::open(&paths.state_dir, &profile.profile_name)?;
+    println!("Monitor state: {}", monitor.state_path().display());
+    let report = collect_status(paths, profile);
+    println!(
+        "Profile: {}\nHealth: {}",
+        profile.profile_name,
+        report.overall.as_str()
+    );
+    let outcome = monitor.run_once(monitor_observation(&report), |event| webhook.send(event))?;
+    println!(
+        "Delivery: {}\nPending events: {}",
+        outcome.delivery, outcome.pending_events
+    );
+    if let Some(id) = outcome.event_id {
+        println!("Event: {id}");
+    }
+    if let Some(error) = outcome.delivery_error {
+        println!("Delivery error: {error}");
+    }
+    Ok(ExitCode::from(u8::from(
+        report.overall != OverallStatus::Healthy || outcome.pending_events > 0,
+    )))
 }
 
 fn write_status(output: &mut impl Write, report: &StatusReport, json: bool) -> Result<()> {
@@ -3731,6 +3796,10 @@ fn run() -> Result<ExitCode> {
             write_status(&mut std::io::stdout().lock(), &report, json)?;
             return Ok(ExitCode::from(report.exit_code));
         }
+        CommandKind::Monitor { once } => {
+            debug_assert!(once);
+            return monitor_once(&paths, &profile);
+        }
         CommandKind::Check => {
             return Ok(if run_checks(&paths, &profile) {
                 ExitCode::SUCCESS
@@ -4196,6 +4265,81 @@ mod tests {
         assert!(matches!(cli.command, CommandKind::Status { json: false }));
         let cli = Cli::try_parse_from(["rimbunctl", "dev", "status", "--json"]).unwrap();
         assert!(matches!(cli.command, CommandKind::Status { json: true }));
+    }
+
+    #[test]
+    fn monitor_requires_once_and_inherits_a_webhook_variable_not_a_url() {
+        assert!(Cli::try_parse_from(["rimbunctl", "dev", "monitor"]).is_err());
+        let cli = Cli::try_parse_from(["rimbunctl", "dev", "monitor", "--once"]).unwrap();
+        assert!(matches!(cli.command, CommandKind::Monitor { once: true }));
+        let config: FileConfig = toml::from_str(
+            r#"
+            [fragments.alerts.monitor]
+            webhook_url_env = "PROJECT_WEBHOOK"
+            [profiles.parent]
+            extends = ["alerts"]
+            [profiles.child]
+            extends = ["parent"]
+            [profiles.child.monitor]
+            [profiles.override]
+            extends = ["parent"]
+            [profiles.override.monitor]
+            webhook_url_env = "OTHER_WEBHOOK"
+        "#,
+        )
+        .unwrap();
+        let registry = ConfigRegistry {
+            fragments: config.fragments,
+            profiles: config.profiles,
+        };
+        for (name, expected) in [
+            ("parent", "PROJECT_WEBHOOK"),
+            ("child", "PROJECT_WEBHOOK"),
+            ("override", "OTHER_WEBHOOK"),
+        ] {
+            assert_eq!(
+                resolve_profile(&registry, name)
+                    .unwrap()
+                    .monitor
+                    .webhook_url_env
+                    .unwrap()
+                    .0,
+                expected
+            );
+        }
+        for invalid in [
+            "",
+            "1TOKEN",
+            "TOKEN WITH SPACES",
+            "https://secret.example/token",
+        ] {
+            let raw = format!("[profiles.test.monitor]\nwebhook_url_env = {invalid:?}");
+            assert!(toml::from_str::<FileConfig>(&raw).is_err());
+        }
+        assert!(
+            toml::from_str::<FileConfig>(
+                "[profiles.test.monitor]\nwebhook_url = 'https://secret.example/token'"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn monitor_signals_exclude_timestamps_metrics_paths_and_free_form_errors_from_deduplication() {
+        let paths = temporary_paths("monitor-observation");
+        let first = status_fixture(&paths, "running", "ready", 300, 3);
+        let mut later = status_fixture(&paths, "running", "ready", 999, 9);
+        later.state_dir = PathBuf::from("/sensitive-state-directory");
+        let first = monitor_observation(&first);
+        let later = monitor_observation(&later);
+        assert_eq!(first.overall, later.overall);
+        assert_eq!(first.problems, later.problems);
+        let payload = serde_json::to_string(&later).unwrap();
+        assert!(!payload.contains("secret-must-not-leak"));
+        assert!(!payload.contains("sensitive-state-directory"));
+        assert!(!payload.contains("oldest_seconds"));
+        assert!(!payload.contains("max_attempts"));
+        fs::remove_dir_all(paths.state_dir).unwrap();
     }
 
     fn status_fixture(
