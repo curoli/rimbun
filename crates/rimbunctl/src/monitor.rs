@@ -186,13 +186,27 @@ impl Monitor {
         self.directory.join("state.json")
     }
     pub fn open(state_dir: &Path, profile: &str) -> Result<Self, MonitorError> {
+        Self::open_with_directory_sync(state_dir, profile, |path| File::open(path)?.sync_all())
+    }
+
+    fn open_with_directory_sync(
+        state_dir: &Path,
+        profile: &str,
+        mut sync_directory: impl FnMut(&Path) -> std::io::Result<()>,
+    ) -> Result<Self, MonitorError> {
         let key = format!("{:x}", Sha256::digest(profile.as_bytes()));
-        let directory = state_dir.join("monitor").join(key);
+        let directory = std::path::absolute(state_dir.join("monitor").join(key))
+            .map_err(|_| MonitorError::StateIo)?;
         fs::DirBuilder::new()
             .recursive(true)
             .mode(0o700)
             .create(&directory)
             .map_err(|_| MonitorError::StateIo)?;
+        // Each directory entry needs its parent's fsync, including state directories
+        // created by the caller or left behind by a previous failed initialization.
+        for ancestor in directory.ancestors() {
+            sync_directory(ancestor).map_err(|_| MonitorError::StateIo)?;
+        }
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -449,6 +463,91 @@ mod tests {
                     code: code.to_owned(),
                 }]
             },
+        }
+    }
+
+    #[test]
+    fn first_open_syncs_the_entire_new_directory_chain_before_delivery() {
+        let directory = Directory::new();
+        let state_dir = directory.0.join("missing/state/profile");
+        let state_file = state_dir
+            .join("monitor")
+            .join(format!("{:x}", Sha256::digest(b"test")))
+            .join("state.json");
+        assert!(!state_dir.exists());
+        let mut synced = Vec::new();
+        let mut monitor = Monitor::open_with_directory_sync(&state_dir, "test", |path| {
+            assert!(path.is_dir());
+            assert!(!state_file.exists());
+            File::open(path)?.sync_all()?;
+            synced.push(path.to_path_buf());
+            Ok(())
+        })
+        .unwrap();
+        let expected: Vec<_> = monitor
+            .directory
+            .ancestors()
+            .map(Path::to_path_buf)
+            .collect();
+        assert_eq!(synced, expected);
+        assert_eq!(synced.last().unwrap(), Path::new("/"));
+        monitor
+            .run_once(observation(Health::Degraded, "first"), |_| {
+                assert_eq!(synced, expected);
+                Err(DeliveryError::RequestFailed)
+            })
+            .unwrap();
+        drop(monitor);
+        let recovered = Monitor::open(&state_dir, "test").unwrap();
+        assert_eq!(recovered.state.pending.len(), 1);
+    }
+
+    #[test]
+    fn each_directory_sync_failure_prevents_delivery_and_is_retried() {
+        let fixture = Directory::new();
+        let state_dir = fixture.0.join("missing/state/profile");
+        let leaf = state_dir
+            .join("monitor")
+            .join(format!("{:x}", Sha256::digest(b"test")));
+        let expected: Vec<_> = leaf.ancestors().map(Path::to_path_buf).collect();
+        for failed_at in 0..expected.len() {
+            fs::remove_dir_all(fixture.0.join("missing"))
+                .or_else(|error| {
+                    if error.kind() == std::io::ErrorKind::NotFound {
+                        Ok(())
+                    } else {
+                        Err(error)
+                    }
+                })
+                .unwrap();
+            let mut synced = Vec::new();
+            let result = Monitor::open_with_directory_sync(&state_dir, "test", |path| {
+                synced.push(path.to_path_buf());
+                if synced.len() == failed_at + 1 {
+                    return Err(std::io::Error::from_raw_os_error(nix::libc::EIO));
+                }
+                File::open(path)?.sync_all()
+            })
+            .and_then(|mut monitor| {
+                monitor.run_once(observation(Health::Degraded, "first"), |_| {
+                    panic!("directory sync failure must prevent HTTP delivery")
+                })
+            });
+            assert!(matches!(result, Err(MonitorError::StateIo)));
+            assert_eq!(synced, expected[..=failed_at]);
+            assert!(!leaf.join("state.json").exists());
+            synced.clear();
+            let retried = Monitor::open_with_directory_sync(&state_dir, "test", |path| {
+                File::open(path)?.sync_all()?;
+                synced.push(path.to_path_buf());
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(
+                synced, expected,
+                "existing directories must be synced again"
+            );
+            drop(retried);
         }
     }
 

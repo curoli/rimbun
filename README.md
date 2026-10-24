@@ -293,11 +293,15 @@ format; chat services may need an adapter.
 
 Each profile has a locked, atomically saved state file under
 `.rimbun/<state_namespace>/monitor/<profile-name-sha256>/state.json` (new directories
-are mode 0700 and files 0600). The command prints the exact path. Events are saved
-**before** delivery; at most one queued event is attempted per invocation, oldest
-first. Failed deliveries remain queued even if the profile has already recovered;
-later invocations retry them before delivering recovery. Health and delivery state
-are reported separately. Exit code 0 requires healthy services and an empty queue;
+are mode 0700 and files 0600). The command prints the exact path. Initialization
+synchronizes the state directory and its entire parent chain, including
+directories already created by another command or a failed initialization. Any
+directory synchronization failure aborts monitoring before HTTP delivery. The
+filesystem must support directory synchronization and ancestors must be readable.
+Events are saved **before** delivery; at most one queued event is attempted per
+invocation, oldest first. Failed deliveries remain queued even if the profile has
+already recovered; later invocations retry them before delivering recovery. Health
+and delivery state are reported separately. Exit code 0 requires healthy services and an empty queue;
 unhealthy services, outstanding delivery, or monitor errors return 1.
 
 Only HTTP 2xx acknowledges an event. Requests use a two-second connection timeout
